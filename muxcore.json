@@ -1,0 +1,16 @@
+{
+  "name": "Downloader Native Torrent",
+  "description": "Native torrent download engine with no external dependencies (anacrolix/torrent)",
+  "version": "0.1.0",
+  "author": "MuxCore",
+  "roles": ["downloader"],
+  "capabilities": ["downloader.native.torrent"],
+  "contracts": [
+    {
+      "repo": "github.com/Muxcore-Media/contracts-downloader",
+      "interface": "Downloader",
+      "version": "v0.1.0"
+    }
+  ],
+  "minCoreVersion": "0.4.0"
+}

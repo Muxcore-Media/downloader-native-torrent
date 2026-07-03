@@ -1,0 +1,120 @@
+syntax = "proto3";
+package muxcore.downloader.v1;
+option go_package = "github.com/Muxcore-Media/downloader-native-torrent/proto/downloaderv1;downloaderv1";
+
+service TorrentService {
+  rpc AddTorrent(AddTorrentRequest) returns (AddTorrentResponse);
+  rpc RemoveTorrent(RemoveTorrentRequest) returns (RemoveTorrentResponse);
+  rpc GetTorrent(GetTorrentRequest) returns (GetTorrentResponse);
+  rpc ListTorrents(ListTorrentsRequest) returns (ListTorrentsResponse);
+  rpc VpnStatus(VpnStatusRequest) returns (VpnStatusResponse);
+  rpc VpnStart(VpnStartRequest) returns (VpnStartResponse);
+  rpc VpnStop(VpnStopRequest) returns (VpnStopResponse);
+  rpc NatPmpStatus(NatPmpStatusRequest) returns (NatPmpStatusResponse);
+}
+
+message AddTorrentRequest {
+  string uri = 1;
+  string save_path = 2;
+  string label = 3;
+  bool paused = 4;
+}
+
+message AddTorrentResponse {
+  string id = 1;
+  string name = 2;
+  string info_hash = 3;
+}
+
+message RemoveTorrentRequest {
+  string id = 1;
+  bool delete_files = 2;
+}
+
+message RemoveTorrentResponse {}
+
+message GetTorrentRequest {
+  string id = 1;
+}
+
+message GetTorrentResponse {
+  TorrentInfo torrent = 1;
+}
+
+message ListTorrentsRequest {
+  string filter = 1;
+}
+
+message ListTorrentsResponse {
+  repeated TorrentInfo torrents = 1;
+}
+
+message TorrentInfo {
+  string id = 1;
+  string name = 2;
+  string info_hash = 3;
+  int64 total_size = 4;
+  int64 downloaded = 5;
+  double progress = 6;
+  int32 peers = 7;
+  int32 seeders = 8;
+  int32 upload_rate = 9;
+  int32 download_rate = 10;
+  string status = 11;
+  string error = 12;
+  string save_path = 13;
+  string label = 14;
+  string added_at = 15;
+  string completed_at = 16;
+  repeated TorrentFile files = 17;
+}
+
+message TorrentFile {
+  string path = 1;
+  int64 size = 2;
+  int64 downloaded = 3;
+}
+
+message VpnStatusRequest {}
+
+message VpnStatusResponse {
+  bool connected = 1;
+  string interface_name = 2;
+  string local_ip = 3;
+  string gateway_ip = 4;
+  string config_file = 5;
+  int64 connected_at_unix = 6;
+  bool kill_switch_enabled = 7;
+}
+
+message VpnStartRequest {
+  string config_file = 1;
+  bool enable_kill_switch = 2;
+  int32 torrent_listen_port = 3;
+  bool enable_nat_pmp = 4;
+}
+
+message VpnStartResponse {
+  bool started = 1;
+  string interface_name = 2;
+  string local_ip = 3;
+  string error = 4;
+}
+
+message VpnStopRequest {}
+
+message VpnStopResponse {
+  bool stopped = 1;
+}
+
+message NatPmpStatusRequest {}
+
+message NatPmpStatusResponse {
+  bool enabled = 1;
+  int32 internal_port = 2;
+  int32 external_port = 3;
+  string protocol = 4;
+  int32 lifetime_seconds = 5;
+  int64 mapped_at_unix = 6;
+  string gateway = 7;
+}
