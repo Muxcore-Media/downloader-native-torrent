@@ -1,10 +1,10 @@
 {
   "name": "Downloader Native Torrent",
-  "description": "Native torrent download engine with no external dependencies (anacrolix/torrent)",
-  "version": "0.1.0",
+  "description": "Native BitTorrent engine (anacrolix/torrent) with WireGuard VPN and NAT-PMP support",
+  "version": "0.2.0",
   "author": "MuxCore",
   "roles": ["downloader"],
-  "capabilities": ["downloader.native.torrent"],
+  "capabilities": ["downloader", "downloader.native.torrent"],
   "contracts": [
     {
       "repo": "github.com/Muxcore-Media/contracts-downloader",

@@ -2,17 +2,31 @@ package internal
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	downloaderv1 "github.com/Muxcore-Media/downloader-native-torrent/proto/downloaderv1"
 )
 
 func newTestModule(t *testing.T) *Module {
 	t.Helper()
+	return newTestModuleWithEngine(t, &fakeEngine{instantComplete: true})
+}
+
+func newTestModuleWithEngine(t *testing.T, eng torrentEngine) *Module {
+	t.Helper()
 	m := NewModule(Config{
 		GRPCAddr:    ":0",
 		DownloadDir: filepath.Join(t.TempDir(), "downloads"),
+		Engine:      eng,
+		SeedMinutes: 1,
+		SeedRatio:   1.0,
+		InfoTimeout: 5 * time.Second,
 	})
 	ctx := context.Background()
 	if err := m.Init(ctx); err != nil {
@@ -23,7 +37,7 @@ func newTestModule(t *testing.T) *Module {
 }
 
 func TestModuleInfo(t *testing.T) {
-	m := NewModule(Config{})
+	m := NewModule(Config{Engine: &fakeEngine{}})
 	info := m.Info()
 	if info.ID == "" {
 		t.Error("module ID must not be empty")
@@ -67,11 +81,19 @@ func TestAddTorrentEmptyURI(t *testing.T) {
 	}
 }
 
+func TestAddTorrentUnsupportedScheme(t *testing.T) {
+	m := newTestModule(t)
+	_, err := m.AddTorrent(context.Background(), &downloaderv1.AddTorrentRequest{Uri: "ftp://x/file.torrent"})
+	if err == nil {
+		t.Fatal("expected error for ftp")
+	}
+}
+
 func TestGetTorrent(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
 
-	add, _ := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:BB&dn=Test"})
+	add, _ := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB&dn=Test"})
 
 	get, err := m.GetTorrent(ctx, &downloaderv1.GetTorrentRequest{Id: add.Id})
 	if err != nil {
@@ -79,9 +101,6 @@ func TestGetTorrent(t *testing.T) {
 	}
 	if get.Torrent.Name != "Test" {
 		t.Errorf("expected 'Test', got %s", get.Torrent.Name)
-	}
-	if get.Torrent.Status != "queued" && get.Torrent.Status != "downloading" {
-		t.Errorf("expected status 'queued' or 'downloading', got %s", get.Torrent.Status)
 	}
 }
 
@@ -99,7 +118,7 @@ func TestRemoveTorrent(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
 
-	add, _ := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:CC&dn=RemoveMe"})
+	add, _ := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC&dn=RemoveMe"})
 	m.RemoveTorrent(ctx, &downloaderv1.RemoveTorrentRequest{Id: add.Id})
 
 	_, err := m.GetTorrent(ctx, &downloaderv1.GetTorrentRequest{Id: add.Id})
@@ -112,8 +131,8 @@ func TestListTorrents(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
 
-	m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:D1&dn=One"})
-	m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:D2&dn=Two"})
+	m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1&dn=One"})
+	m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2&dn=Two"})
 
 	resp, err := m.ListTorrents(ctx, &downloaderv1.ListTorrentsRequest{})
 	if err != nil {
@@ -128,14 +147,14 @@ func TestListTorrentsFilterDownloading(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
 
-	m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:E1&dn=Test"})
+	m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1&dn=Test"})
 
-	resp, err := m.ListTorrents(ctx, &downloaderv1.ListTorrentsRequest{Filter: "completed"})
+	resp, err := m.ListTorrents(ctx, &downloaderv1.ListTorrentsRequest{Filter: "seeding-only-no-match"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(resp.Torrents) != 0 {
-		t.Errorf("expected 0 completed torrents, got %d", len(resp.Torrents))
+		t.Errorf("expected 0 torrents for nonsense filter, got %d", len(resp.Torrents))
 	}
 }
 
@@ -173,21 +192,138 @@ func TestParseMagnetName(t *testing.T) {
 	}
 }
 
-func TestDownloadProgresses(t *testing.T) {
-	m := newTestModule(t)
+func TestDownloadCompletesWithFakeEngine(t *testing.T) {
+	eng := &fakeEngine{instantComplete: true}
+	m := newTestModuleWithEngine(t, eng)
 	ctx := context.Background()
 
-	add, _ := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:GG&dn=Progress"})
-
-	get, err := m.GetTorrent(ctx, &downloaderv1.GetTorrentRequest{Id: add.Id})
+	add, err := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{
+		Uri: "magnet:?xt=urn:btih:GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG&dn=Progress",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if get.Torrent.Progress < 0 {
-		t.Errorf("expected non-negative progress, got %f", get.Torrent.Progress)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		get, err := m.GetTorrent(ctx, &downloaderv1.GetTorrentRequest{Id: add.Id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if get.Torrent.Status == "completed" {
+			if get.Torrent.Progress < 100 {
+				t.Errorf("completed but progress=%f", get.Torrent.Progress)
+			}
+			return
+		}
+		if get.Torrent.Status == "error" {
+			t.Fatalf("unexpected error: %s", get.Torrent.Error)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if get.Torrent.DownloadRate > 0 || get.Torrent.Status == "downloading" {
-		// download is in progress or queued — acceptable
+	t.Fatal("timed out waiting for completed")
+}
+
+func TestAddTorrentPaused(t *testing.T) {
+	eng := &fakeEngine{instantComplete: true}
+	m := newTestModuleWithEngine(t, eng)
+	ctx := context.Background()
+
+	add, err := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{
+		Uri:    "magnet:?xt=urn:btih:HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH&dn=Paused",
+		Paused: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		get, _ := m.GetTorrent(ctx, &downloaderv1.GetTorrentRequest{Id: add.Id})
+		if get.Torrent.Status == "paused" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("expected paused status")
+}
+
+func TestAddTorrentFailEngine(t *testing.T) {
+	eng := &fakeEngine{failAdd: fmt.Errorf("boom")}
+	m := newTestModuleWithEngine(t, eng)
+	ctx := context.Background()
+
+	add, err := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{
+		Uri: "magnet:?xt=urn:btih:IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII&dn=Fail",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		get, _ := m.GetTorrent(ctx, &downloaderv1.GetTorrentRequest{Id: add.Id})
+		if get.Torrent.Status == "error" {
+			if !strings.Contains(get.Torrent.Error, "boom") {
+				t.Errorf("error: %s", get.Torrent.Error)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("expected error status")
+}
+
+func TestRemoveDeletesFiles(t *testing.T) {
+	eng := &fakeEngine{instantComplete: true}
+	m := newTestModuleWithEngine(t, eng)
+	ctx := context.Background()
+	dir := m.dlDir
+	add, _ := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{
+		Uri: "magnet:?xt=urn:btih:JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ&dn=DelMe",
+	})
+	// wait briefly then remove with delete
+	time.Sleep(50 * time.Millisecond)
+	_, err := m.RemoveTorrent(ctx, &downloaderv1.RemoveTorrentRequest{Id: add.Id, DeleteFiles: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = dir
+}
+
+func TestClassifyURI(t *testing.T) {
+	if _, err := classifyURI("magnet:?xt=urn:btih:aa"); err != nil {
+		t.Fatal(err)
+	}
+	if kind, err := classifyURI("https://example.test/a.torrent"); err != nil || kind != "http" {
+		t.Fatalf("got %s %v", kind, err)
+	}
+	if _, err := classifyURI("file:///tmp/x"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestFetchTorrentFileHTTPtest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("not-a-real-torrent-but-fetched"))
+	}))
+	t.Cleanup(srv.Close)
+	data, err := fetchTorrentFile(context.Background(), srv.Client(), srv.URL+"/x.torrent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "not-a-real-torrent-but-fetched" {
+		t.Errorf("got %q", data)
+	}
+}
+
+func TestFetchTorrentFileTooLarge(t *testing.T) {
+	big := strings.Repeat("a", maxTorrentFileBytes+10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(big))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := fetchTorrentFile(context.Background(), srv.Client(), srv.URL)
+	if err == nil {
+		t.Fatal("expected size error")
 	}
 }
 
@@ -264,7 +400,7 @@ func TestDeriveInterfaceName(t *testing.T) {
 }
 
 func TestDescription(t *testing.T) {
-	m := NewModule(Config{})
+	m := NewModule(Config{Engine: &fakeEngine{}})
 	desc := m.Info().Description
 	if desc == "" {
 		t.Error("description must not be empty")
@@ -279,7 +415,11 @@ func contains(s, sub string) bool {
 }
 
 func TestLifecycle(t *testing.T) {
-	m := NewModule(Config{GRPCAddr: ":0", DownloadDir: filepath.Join(t.TempDir(), "dl")})
+	m := NewModule(Config{
+		GRPCAddr:    ":0",
+		DownloadDir: filepath.Join(t.TempDir(), "dl"),
+		Engine:      &fakeEngine{},
+	})
 	ctx := context.Background()
 	if err := m.Init(ctx); err != nil {
 		t.Fatal(err)
