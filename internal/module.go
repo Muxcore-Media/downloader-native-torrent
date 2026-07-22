@@ -2,16 +2,20 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	"github.com/Muxcore-Media/core/sdk/go/client"
 	downloaderv1 "github.com/Muxcore-Media/downloader-native-torrent/proto/downloaderv1"
 )
 
@@ -22,12 +26,18 @@ type Module struct {
 
 	vpn    *vpnManager
 	natPMP *natPMPClient
+	engine torrentEngine
+	mc     *client.Client
 
-	id       string
-	grpcAddr string
-	dlDir    string
-	grpcSrv  *grpc.Server
-	lis      net.Listener
+	id          string
+	grpcAddr    string
+	dlDir       string
+	listenPort  int
+	seedRatio   float64
+	seedMinutes int
+	grpcSrv     *grpc.Server
+	lis         net.Listener
+	infoTimeout time.Duration
 }
 
 type torrentHandle struct {
@@ -48,6 +58,10 @@ type torrentHandle struct {
 	ErrorStr     string
 	CompletedAt  *time.Time
 	Files        []fileInfo
+
+	session managedTorrent
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
 
 type fileInfo struct {
@@ -60,9 +74,14 @@ type Config struct {
 	ID           string
 	GRPCAddr     string
 	DownloadDir  string
-	WGConfPath   string // optional: auto-start wireguard on init
-	WGKillSwitch bool   // enable kill switch
-	NatPMPPort   int    // optional: port for NAT-PMP mapping
+	WGConfPath   string
+	WGKillSwitch bool
+	NatPMPPort   int
+	ListenPort   int
+	SeedRatio    float64
+	SeedMinutes  int
+	Engine       torrentEngine // optional; tests inject a fake
+	InfoTimeout  time.Duration
 }
 
 func NewModule(cfg Config) *Module {
@@ -74,6 +93,18 @@ func NewModule(cfg Config) *Module {
 	}
 	if cfg.DownloadDir == "" {
 		cfg.DownloadDir = "/var/lib/downloader-native-torrent/downloads"
+	}
+	if cfg.ListenPort == 0 {
+		cfg.ListenPort = 6881
+	}
+	if cfg.SeedRatio == 0 {
+		cfg.SeedRatio = 1.0
+	}
+	if cfg.SeedMinutes == 0 {
+		cfg.SeedMinutes = 60
+	}
+	if cfg.InfoTimeout == 0 {
+		cfg.InfoTimeout = 10 * time.Minute
 	}
 	if v := os.Getenv("DOWNLOADER_GRPC_ADDR"); v != "" {
 		cfg.GRPCAddr = v
@@ -90,13 +121,36 @@ func NewModule(cfg Config) *Module {
 	if v := os.Getenv("NAT_PMP_PORT"); v != "" {
 		fmt.Sscanf(v, "%d", &cfg.NatPMPPort)
 	}
+	if v := os.Getenv("TORRENT_LISTEN_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 {
+			cfg.ListenPort = p
+		}
+	} else if cfg.NatPMPPort > 0 {
+		cfg.ListenPort = cfg.NatPMPPort
+	}
+	if v := os.Getenv("SEED_RATIO"); v != "" {
+		if r, err := strconv.ParseFloat(v, 64); err == nil && r > 0 {
+			cfg.SeedRatio = r
+		}
+	}
+	if v := os.Getenv("SEED_MINUTES"); v != "" {
+		if m, err := strconv.Atoi(v); err == nil && m > 0 {
+			cfg.SeedMinutes = m
+		}
+	}
+
 	return &Module{
-		id:       cfg.ID,
-		grpcAddr: cfg.GRPCAddr,
-		dlDir:    cfg.DownloadDir,
-		torrents: make(map[string]*torrentHandle),
-		vpn:      newVPNManager(),
-		natPMP:   newNATPMPClient(),
+		id:          cfg.ID,
+		grpcAddr:    cfg.GRPCAddr,
+		dlDir:       cfg.DownloadDir,
+		listenPort:  cfg.ListenPort,
+		seedRatio:   cfg.SeedRatio,
+		seedMinutes: cfg.SeedMinutes,
+		infoTimeout: cfg.InfoTimeout,
+		engine:      cfg.Engine,
+		torrents:    make(map[string]*torrentHandle),
+		vpn:         newVPNManager(),
+		natPMP:      newNATPMPClient(),
 	}
 }
 
@@ -104,9 +158,9 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Downloader Native Torrent",
-		Version:      "0.1.0",
+		Version:      "0.2.0",
 		Roles:        []string{"downloader"},
-		Description:  "Native torrent download engine with WireGuard VPN and NAT-PMP support",
+		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
 		Capabilities: []string{"downloader"},
 		Contracts: []contracts.ContractDeclaration{
@@ -125,15 +179,22 @@ func (m *Module) Init(ctx context.Context) error {
 	if err := os.MkdirAll(m.dlDir, 0755); err != nil {
 		return fmt.Errorf("create download dir: %w", err)
 	}
+	if m.engine == nil {
+		eng, err := newAnacrolixEngine(m.dlDir, m.listenPort, nil)
+		if err != nil {
+			return err
+		}
+		m.engine = eng
+	}
 	lis, err := net.Listen("tcp", m.grpcAddr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", m.grpcAddr, err)
 	}
 	m.lis = lis
-	slog.Info("downloader-native-torrent initialized", "addr", m.grpcAddr, "dir", m.dlDir)
+	slog.Info("downloader-native-torrent initialized",
+		"addr", m.grpcAddr, "dir", m.dlDir, "listen_port", m.listenPort)
 
 	go m.autoStartVPN()
-
 	return nil
 }
 
@@ -187,12 +248,48 @@ func (m *Module) Start(ctx context.Context) error {
 			slog.Error("downloader-native-torrent gRPC serve error", "error", err)
 		}
 	}()
+	go m.dialCore(context.Background())
 	return nil
 }
 
+func (m *Module) dialCore(ctx context.Context) {
+	meshAddr := os.Getenv("MUXCORE_GRPC_ADDR")
+	if meshAddr == "" {
+		return // optional — events soft-skip without mesh
+	}
+	insecureMode := os.Getenv("MUXCORE_GRPC_INSECURE") == "true"
+	var opts []client.Option
+	if insecureMode {
+		opts = append(opts, client.WithInsecure())
+	}
+	c, err := client.Dial(meshAddr, opts...)
+	if err != nil {
+		slog.Warn("downloader: dial core failed", "error", err)
+		return
+	}
+	m.mu.Lock()
+	m.mc = c
+	m.mu.Unlock()
+	slog.Info("downloader: connected to core mesh", "addr", meshAddr)
+}
+
 func (m *Module) Stop(ctx context.Context) error {
+	m.mu.Lock()
+	for _, th := range m.torrents {
+		if th.cancel != nil {
+			th.cancel()
+		}
+	}
+	m.mu.Unlock()
+
+	if m.engine != nil {
+		_ = m.engine.Close()
+	}
 	m.natPMP.stop()
 	m.vpn.stop()
+	if m.mc != nil {
+		m.mc.Close()
+	}
 	if m.grpcSrv != nil {
 		m.grpcSrv.GracefulStop()
 	}
@@ -215,11 +312,18 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 	if uri == "" {
 		return nil, fmt.Errorf("uri is required")
 	}
+	if _, err := classifyURI(uri); err != nil {
+		return nil, err
+	}
 	savePath := req.GetSavePath()
 	if savePath == "" {
 		savePath = m.dlDir
 	}
+	if err := os.MkdirAll(savePath, 0755); err != nil {
+		return nil, fmt.Errorf("create save path: %w", err)
+	}
 
+	runCtx, cancel := context.WithCancel(context.Background())
 	th := &torrentHandle{
 		ID:       fmt.Sprintf("torrent_%d", time.Now().UnixNano()),
 		Name:     parseMagnetName(uri),
@@ -229,13 +333,15 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 		AddedAt:  time.Now(),
 		Status:   "queued",
 		Files:    []fileInfo{},
+		cancel:   cancel,
+		done:     make(chan struct{}),
 	}
 
 	m.mu.Lock()
 	m.torrents[th.ID] = th
 	m.mu.Unlock()
 
-	go m.simulateDownload(th)
+	go m.runTorrent(runCtx, th, uri, req.GetPaused())
 
 	slog.Info("torrent added", "id", th.ID, "name", th.Name)
 	return &downloaderv1.AddTorrentResponse{
@@ -243,11 +349,253 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 	}, nil
 }
 
+func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, paused bool) {
+	defer close(th.done)
+
+	session, err := m.engine.AddURI(ctx, uri, th.SavePath)
+	if err != nil {
+		m.failTorrent(th, err)
+		return
+	}
+	th.mu.Lock()
+	th.session = session
+	th.mu.Unlock()
+
+	infoCtx, infoCancel := context.WithTimeout(ctx, m.infoTimeout)
+	defer infoCancel()
+	if err := session.WaitInfo(infoCtx); err != nil {
+		session.Drop()
+		m.failTorrent(th, fmt.Errorf("wait metadata: %w", err))
+		return
+	}
+	m.syncHandleFromTorrent(th, session)
+
+	if paused {
+		th.mu.Lock()
+		th.Status = "paused"
+		th.mu.Unlock()
+		slog.Info("torrent paused after metadata", "id", th.ID)
+		<-ctx.Done()
+		session.Drop()
+		return
+	}
+
+	session.DownloadAll()
+	th.mu.Lock()
+	th.Status = "downloading"
+	th.mu.Unlock()
+	m.publishDownloadEvent(contracts.EventDownloadStarted, th, "")
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	var lastBytes int64
+	var lastUp int64
+	lastTick := time.Now()
+
+	for {
+		select {
+		case <-ctx.Done():
+			session.Drop()
+			return
+		case <-ticker.C:
+			completed := session.BytesCompleted()
+			missing := session.BytesMissing()
+			uploaded := session.BytesUploaded()
+			now := time.Now()
+			elapsed := now.Sub(lastTick).Seconds()
+			var dlRate, upRate int32
+			if elapsed > 0 {
+				dlRate = int32(float64(completed-lastBytes) / elapsed)
+				upRate = int32(float64(uploaded-lastUp) / elapsed)
+				if dlRate < 0 {
+					dlRate = 0
+				}
+				if upRate < 0 {
+					upRate = 0
+				}
+			}
+			lastBytes = completed
+			lastUp = uploaded
+			lastTick = now
+
+			files := session.Files()
+			for i := range files {
+				if files[i].Size > 0 && completed >= session.TotalLength() {
+					files[i].Downloaded = files[i].Size
+				}
+			}
+
+			th.mu.Lock()
+			th.Downloaded = completed
+			th.TotalSize = session.TotalLength()
+			th.Peers = int32(session.ActivePeers())
+			th.Seeders = int32(session.ConnectedSeeders())
+			th.DownloadRate = dlRate
+			th.UploadRate = upRate
+			if len(files) > 0 {
+				th.Files = files
+			}
+			th.mu.Unlock()
+
+			if missing == 0 && session.TotalLength() > 0 {
+				m.markCompleted(th, session)
+				m.seedUntilDone(ctx, th, session)
+				session.Drop()
+				return
+			}
+		}
+	}
+}
+
+func (m *Module) syncHandleFromTorrent(th *torrentHandle, session managedTorrent) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if n := session.Name(); n != "" {
+		th.Name = n
+	}
+	if h := session.InfoHash(); h != "" {
+		th.InfoHash = h
+	}
+	th.TotalSize = session.TotalLength()
+	th.Files = session.Files()
+}
+
+func (m *Module) markCompleted(th *torrentHandle, session managedTorrent) {
+	now := time.Now()
+	files := session.Files()
+	for i := range files {
+		files[i].Downloaded = files[i].Size
+	}
+	th.mu.Lock()
+	th.Status = "completed"
+	th.Downloaded = session.TotalLength()
+	th.TotalSize = session.TotalLength()
+	th.DownloadRate = 0
+	th.CompletedAt = &now
+	th.Files = files
+	th.mu.Unlock()
+	m.publishDownloadEvent(contracts.EventDownloadCompleted, th, "")
+	slog.Info("download completed", "id", th.ID, "name", th.Name)
+}
+
+func (m *Module) seedUntilDone(ctx context.Context, th *torrentHandle, session managedTorrent) {
+	deadline := time.Now().Add(time.Duration(m.seedMinutes) * time.Minute)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		if m.seedRatioReached(th, session) || time.Now().After(deadline) {
+			slog.Info("seeding finished", "id", th.ID, "ratio_target", m.seedRatio)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			up := session.BytesUploaded()
+			th.mu.Lock()
+			th.UploadRate = 0
+			th.Peers = int32(session.ActivePeers())
+			th.Seeders = int32(session.ConnectedSeeders())
+			_ = up
+			th.mu.Unlock()
+		}
+	}
+}
+
+func (m *Module) seedRatioReached(th *torrentHandle, session managedTorrent) bool {
+	total := session.TotalLength()
+	if total <= 0 {
+		return true
+	}
+	return float64(session.BytesUploaded())/float64(total) >= m.seedRatio
+}
+
+func (m *Module) failTorrent(th *torrentHandle, err error) {
+	th.mu.Lock()
+	th.Status = "error"
+	th.ErrorStr = err.Error()
+	th.mu.Unlock()
+	m.publishDownloadEvent(contracts.EventDownloadFailed, th, err.Error())
+	slog.Warn("torrent failed", "id", th.ID, "error", err)
+}
+
+func (m *Module) publishDownloadEvent(eventType string, th *torrentHandle, errStr string) {
+	m.mu.RLock()
+	mc := m.mc
+	m.mu.RUnlock()
+	if mc == nil {
+		return
+	}
+	th.mu.RLock()
+	payload := contracts.DownloadEventPayload{
+		ID:       th.ID,
+		Name:     th.Name,
+		InfoHash: th.InfoHash,
+		SavePath: th.SavePath,
+		Label:    th.Label,
+		Error:    errStr,
+	}
+	for _, f := range th.Files {
+		payload.Files = append(payload.Files, contracts.DownloadEventFile{Path: f.Path, Size: f.Size})
+	}
+	th.mu.RUnlock()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := mc.Events.Publish(ctx, eventType, m.id, data); err != nil {
+		slog.Debug("publish download event failed", "type", eventType, "error", err)
+	}
+}
+
 func (m *Module) RemoveTorrent(ctx context.Context, req *downloaderv1.RemoveTorrentRequest) (*downloaderv1.RemoveTorrentResponse, error) {
+	id := req.GetId()
 	m.mu.Lock()
-	delete(m.torrents, req.GetId())
+	th, ok := m.torrents[id]
+	if ok {
+		delete(m.torrents, id)
+	}
 	m.mu.Unlock()
+	if !ok {
+		return &downloaderv1.RemoveTorrentResponse{}, nil
+	}
+	if th.cancel != nil {
+		th.cancel()
+	}
+	if th.done != nil {
+		select {
+		case <-th.done:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	th.mu.Lock()
+	session := th.session
+	savePath := th.SavePath
+	name := th.Name
+	files := append([]fileInfo(nil), th.Files...)
+	th.mu.Unlock()
+	if session != nil {
+		session.Drop()
+	}
+	if req.GetDeleteFiles() {
+		m.deleteTorrentData(savePath, name, files)
+	}
 	return &downloaderv1.RemoveTorrentResponse{}, nil
+}
+
+func (m *Module) deleteTorrentData(savePath, name string, files []fileInfo) {
+	for _, f := range files {
+		p := f.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(savePath, p)
+		}
+		_ = os.RemoveAll(p)
+	}
+	if name != "" {
+		_ = os.RemoveAll(filepath.Join(savePath, name))
+	}
 }
 
 func (m *Module) GetTorrent(ctx context.Context, req *downloaderv1.GetTorrentRequest) (*downloaderv1.GetTorrentResponse, error) {
@@ -345,8 +693,6 @@ func (m *Module) VpnStop(ctx context.Context, req *downloaderv1.VpnStopRequest) 
 	return &downloaderv1.VpnStopResponse{Stopped: true}, nil
 }
 
-// ── NAT-PMP operations ────────────────────────────────────────
-
 func (m *Module) NatPmpStatus(ctx context.Context, req *downloaderv1.NatPmpStatusRequest) (*downloaderv1.NatPmpStatusResponse, error) {
 	enabled, internalPort, extPort, protocol, lifetime, mappedAt, gateway := m.natPMP.status()
 	ts := int64(0)
@@ -362,46 +708,6 @@ func (m *Module) NatPmpStatus(ctx context.Context, req *downloaderv1.NatPmpStatu
 		MappedAtUnix:    ts,
 		Gateway:         gateway,
 	}, nil
-}
-
-// ── Internal helpers ──────────────────────────────────────────
-
-func (m *Module) simulateDownload(th *torrentHandle) {
-	total := int64(2 * 1024 * 1024 * 1024)
-	th.mu.Lock()
-	th.Status = "downloading"
-	th.TotalSize = total
-	th.mu.Unlock()
-
-	start := time.Now()
-	chunk := int64(256 * 1024)
-
-	for downloaded := int64(0); downloaded < total; {
-		time.Sleep(30 * time.Millisecond)
-		downloaded += chunk
-		if downloaded > total {
-			downloaded = total
-		}
-		elapsed := time.Since(start).Seconds()
-
-		th.mu.Lock()
-		th.Downloaded = downloaded
-		th.DownloadRate = int32(float64(downloaded) / elapsed)
-		th.Peers = int32(8 + time.Now().UnixNano()%5)
-		th.Seeders = int32(3 + time.Now().UnixNano()%3)
-		th.mu.Unlock()
-	}
-
-	th.mu.Lock()
-	th.Status = "completed"
-	th.Downloaded = total
-	th.DownloadRate = 0
-	now := time.Now()
-	th.CompletedAt = &now
-	th.Files = []fileInfo{{Path: th.Name, Size: total, Downloaded: total}}
-	th.mu.Unlock()
-
-	slog.Info("download completed", "id", th.ID, "name", th.Name)
 }
 
 func (th *torrentHandle) toProto() *downloaderv1.TorrentInfo {
@@ -447,6 +753,19 @@ func parseMagnetName(uri string) string {
 		if hasPrefix(part, "dn=") {
 			return urlDecode(part[3:])
 		}
+		// magnet display name may appear after ?
+		if i := indexOf(part, "dn=", 0); i >= 0 && hasPrefix(part[i:], "dn=") {
+			return urlDecode(part[i+3:])
+		}
+	}
+	// also check first segment after ?
+	if i := indexOf(uri, "dn=", 0); i >= 0 {
+		rest := uri[i+3:]
+		end := indexOf(rest, "&", 0)
+		if end >= 0 {
+			return urlDecode(rest[:end])
+		}
+		return urlDecode(rest)
 	}
 	return "unknown"
 }
