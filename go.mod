@@ -3,6 +3,7 @@ module github.com/Muxcore-Media/downloader-native-torrent
 go 1.26.4
 
 require (
+	github.com/Muxcore-Media/contracts-downloader v0.0.0
 	github.com/Muxcore-Media/core/pkg/contracts v0.0.0
 	github.com/Muxcore-Media/core/sdk/go/client v0.1.0
 	github.com/Muxcore-Media/core/sdk/go/module v0.1.0
@@ -113,3 +114,5 @@ replace github.com/Muxcore-Media/core/sdk/go/module => ../core/sdk/go/module
 replace github.com/Muxcore-Media/core/sdk/go/client => ../core/sdk/go/client
 
 replace github.com/Muxcore-Media/core/pkg/contracts => ../core/pkg/contracts
+
+replace github.com/Muxcore-Media/contracts-downloader => ../contracts-downloader

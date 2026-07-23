@@ -108,6 +108,12 @@ func (f *fakeManaged) DownloadAll() {
 	}()
 }
 
+func (f *fakeManaged) PauseDownload() {
+	f.mu.Lock()
+	f.started = false
+	f.mu.Unlock()
+}
+
 func (f *fakeManaged) BytesCompleted() int64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -30,6 +30,7 @@ type managedTorrent interface {
 	TotalLength() int64
 	Files() []fileInfo
 	DownloadAll()
+	PauseDownload()
 	BytesCompleted() int64
 	BytesMissing() int64
 	BytesUploaded() int64
@@ -39,25 +40,57 @@ type managedTorrent interface {
 }
 
 type anacrolixEngine struct {
-	client  *torrent.Client
-	http    *http.Client
-	dataDir string
+	client     *torrent.Client
+	http       *http.Client
+	dataDir    string
+	listenPort int
+	listenHost string
 }
 
-func newAnacrolixEngine(dataDir string, listenPort int, hc *http.Client) (*anacrolixEngine, error) {
+func newAnacrolixEngine(dataDir string, listenPort int, listenHost string, hc *http.Client) (*anacrolixEngine, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.DataDir = dataDir
 	cfg.ListenPort = listenPort
+	if listenHost != "" {
+		host := listenHost
+		cfg.ListenHost = func(string) string { return host }
+	}
 	cfg.NoDefaultPortForwarding = true
 	cfg.Seed = true
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("torrent client: %w", err)
 	}
-	return &anacrolixEngine{client: cl, http: hc, dataDir: dataDir}, nil
+	return &anacrolixEngine{client: cl, http: hc, dataDir: dataDir, listenPort: listenPort, listenHost: listenHost}, nil
+}
+
+func (e *anacrolixEngine) rebind(listenHost string) error {
+	if e == nil {
+		return fmt.Errorf("engine nil")
+	}
+	if listenHost == e.listenHost {
+		return nil
+	}
+	if e.client != nil {
+		e.client.Close()
+	}
+	cfg := torrent.NewDefaultClientConfig()
+	cfg.DataDir = e.dataDir
+	cfg.ListenPort = e.listenPort
+	host := listenHost
+	cfg.ListenHost = func(string) string { return host }
+	cfg.NoDefaultPortForwarding = true
+	cfg.Seed = true
+	cl, err := torrent.NewClient(cfg)
+	if err != nil {
+		return fmt.Errorf("torrent client rebind: %w", err)
+	}
+	e.client = cl
+	e.listenHost = listenHost
+	return nil
 }
 
 func (e *anacrolixEngine) Close() error {
@@ -161,6 +194,12 @@ func (a *anacrolixTorrent) Files() []fileInfo {
 }
 
 func (a *anacrolixTorrent) DownloadAll() { a.t.DownloadAll() }
+
+func (a *anacrolixTorrent) PauseDownload() {
+	for _, f := range a.t.Files() {
+		f.SetPriority(torrent.PiecePriorityNone)
+	}
+}
 
 func (a *anacrolixTorrent) BytesCompleted() int64 { return a.t.BytesCompleted() }
 
