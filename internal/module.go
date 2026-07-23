@@ -14,6 +14,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	cdlv1 "github.com/Muxcore-Media/contracts-downloader/muxcore/downloader/v1"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/Muxcore-Media/core/sdk/go/client"
 	downloaderv1 "github.com/Muxcore-Media/downloader-native-torrent/proto/downloaderv1"
@@ -29,15 +30,17 @@ type Module struct {
 	engine torrentEngine
 	mc     *client.Client
 
-	id          string
-	grpcAddr    string
-	dlDir       string
-	listenPort  int
-	seedRatio   float64
-	seedMinutes int
-	grpcSrv     *grpc.Server
-	lis         net.Listener
-	infoTimeout time.Duration
+	id           string
+	grpcAddr     string
+	dlDir        string
+	listenPort   int
+	seedRatio    float64
+	seedMinutes  int
+	wgConfPath   string
+	wgKillSwitch bool
+	grpcSrv      *grpc.Server
+	lis          net.Listener
+	infoTimeout  time.Duration
 }
 
 type torrentHandle struct {
@@ -59,9 +62,10 @@ type torrentHandle struct {
 	CompletedAt  *time.Time
 	Files        []fileInfo
 
-	session managedTorrent
-	cancel  context.CancelFunc
-	done    chan struct{}
+	session  managedTorrent
+	cancel   context.CancelFunc
+	done     chan struct{}
+	resumeCh chan struct{}
 }
 
 type fileInfo struct {
@@ -140,17 +144,19 @@ func NewModule(cfg Config) *Module {
 	}
 
 	return &Module{
-		id:          cfg.ID,
-		grpcAddr:    cfg.GRPCAddr,
-		dlDir:       cfg.DownloadDir,
-		listenPort:  cfg.ListenPort,
-		seedRatio:   cfg.SeedRatio,
-		seedMinutes: cfg.SeedMinutes,
-		infoTimeout: cfg.InfoTimeout,
-		engine:      cfg.Engine,
-		torrents:    make(map[string]*torrentHandle),
-		vpn:         newVPNManager(),
-		natPMP:      newNATPMPClient(),
+		id:           cfg.ID,
+		grpcAddr:     cfg.GRPCAddr,
+		dlDir:        cfg.DownloadDir,
+		listenPort:   cfg.ListenPort,
+		seedRatio:    cfg.SeedRatio,
+		seedMinutes:  cfg.SeedMinutes,
+		infoTimeout:  cfg.InfoTimeout,
+		wgConfPath:   cfg.WGConfPath,
+		wgKillSwitch: cfg.WGKillSwitch,
+		engine:       cfg.Engine,
+		torrents:     make(map[string]*torrentHandle),
+		vpn:          newVPNManager(),
+		natPMP:       newNATPMPClient(),
 	}
 }
 
@@ -162,7 +168,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 		Roles:        []string{"downloader"},
 		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
-		Capabilities: []string{"downloader"},
+		Capabilities: []string{"downloader", "downloader.native.torrent", "settings"},
 		Contracts: []contracts.ContractDeclaration{
 			{
 				Repo:      "github.com/Muxcore-Media/contracts-downloader",
@@ -180,7 +186,7 @@ func (m *Module) Init(ctx context.Context) error {
 		return fmt.Errorf("create download dir: %w", err)
 	}
 	if m.engine == nil {
-		eng, err := newAnacrolixEngine(m.dlDir, m.listenPort, nil)
+		eng, err := newAnacrolixEngine(m.dlDir, m.listenPort, "", nil)
 		if err != nil {
 			return err
 		}
@@ -199,12 +205,15 @@ func (m *Module) Init(ctx context.Context) error {
 }
 
 func (m *Module) autoStartVPN() {
-	cfgPath := os.Getenv("WG_CONF")
+	cfgPath := m.wgConfPath
+	if cfgPath == "" {
+		cfgPath = os.Getenv("WG_CONF")
+	}
 	if cfgPath == "" {
 		return
 	}
 
-	ks := os.Getenv("WG_KILL_SWITCH") == "true"
+	ks := m.wgKillSwitch || os.Getenv("WG_KILL_SWITCH") == "true"
 	slog.Info("auto-starting wireguard", "config", cfgPath)
 
 	if err := m.vpn.start(cfgPath, ks); err != nil {
@@ -214,6 +223,17 @@ func (m *Module) autoStartVPN() {
 
 	if ks {
 		slog.Info("kill switch enabled - all non-VPN traffic blocked")
+	}
+
+	_, iface, localIP, _, _, _, _ := m.vpn.status()
+	if localIP != "" {
+		if eng, ok := m.engine.(*anacrolixEngine); ok {
+			if err := eng.rebind(localIP); err != nil {
+				slog.Warn("vpn: bind torrent client to wireguard ip failed", "ip", localIP, "error", err)
+			} else {
+				slog.Info("torrent client bound to wireguard", "interface", iface, "ip", localIP)
+			}
+		}
 	}
 
 	portStr := os.Getenv("NAT_PMP_PORT")
@@ -242,6 +262,8 @@ func (m *Module) autoStartVPN() {
 func (m *Module) Start(ctx context.Context) error {
 	m.grpcSrv = grpc.NewServer()
 	downloaderv1.RegisterTorrentServiceServer(m.grpcSrv, m)
+	cdlv1.RegisterDownloaderServiceServer(m.grpcSrv, &contractsServer{m: m})
+	m.registerSettingsMesh(m.grpcSrv)
 	go func() {
 		slog.Info("downloader-native-torrent gRPC service started", "addr", m.grpcAddr)
 		if err := m.grpcSrv.Serve(m.lis); err != nil {
@@ -257,7 +279,7 @@ func (m *Module) dialCore(ctx context.Context) {
 	if meshAddr == "" {
 		return // optional — events soft-skip without mesh
 	}
-	insecureMode := os.Getenv("MUXCORE_GRPC_INSECURE") == "true"
+	insecureMode := os.Getenv("MUXCORE_INSECURE_DISABLE_TLS") == "true" || os.Getenv("MUXCORE_GRPC_INSECURE") == "true"
 	var opts []client.Option
 	if insecureMode {
 		opts = append(opts, client.WithInsecure())
@@ -335,6 +357,7 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 		Files:    []fileInfo{},
 		cancel:   cancel,
 		done:     make(chan struct{}),
+		resumeCh: make(chan struct{}, 1),
 	}
 
 	m.mu.Lock()
@@ -375,9 +398,12 @@ func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, 
 		th.Status = "paused"
 		th.mu.Unlock()
 		slog.Info("torrent paused after metadata", "id", th.ID)
-		<-ctx.Done()
-		session.Drop()
-		return
+		select {
+		case <-ctx.Done():
+			session.Drop()
+			return
+		case <-th.resumeCh:
+		}
 	}
 
 	session.DownloadAll()
@@ -398,6 +424,12 @@ func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, 
 			session.Drop()
 			return
 		case <-ticker.C:
+			th.mu.RLock()
+			st := th.Status
+			th.mu.RUnlock()
+			if st == "paused" {
+				continue
+			}
 			completed := session.BytesCompleted()
 			missing := session.BytesMissing()
 			uploaded := session.BytesUploaded()
@@ -629,6 +661,31 @@ func (m *Module) ListTorrents(ctx context.Context, req *downloaderv1.ListTorrent
 }
 
 // ── VPN operations ────────────────────────────────────────────
+
+func (m *Module) PauseTorrent(_ context.Context, req *downloaderv1.PauseTorrentRequest) (*downloaderv1.PauseTorrentResponse, error) {
+	ok, err := m.pauseTorrent(req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	return &downloaderv1.PauseTorrentResponse{Success: ok}, nil
+}
+
+func (m *Module) ResumeTorrent(_ context.Context, req *downloaderv1.ResumeTorrentRequest) (*downloaderv1.ResumeTorrentResponse, error) {
+	ok, err := m.resumeTorrent(req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	return &downloaderv1.ResumeTorrentResponse{Success: ok}, nil
+}
+
+func (m *Module) GetCapabilities(context.Context, *downloaderv1.GetCapabilitiesRequest) (*downloaderv1.GetCapabilitiesResponse, error) {
+	return &downloaderv1.GetCapabilitiesResponse{
+		SupportsCategories:    true,
+		SupportsPausing:       true,
+		SupportsFileSelection: false,
+		SupportedProtocols:    []string{"torrent", "magnet"},
+	}, nil
+}
 
 func (m *Module) VpnStatus(ctx context.Context, req *downloaderv1.VpnStatusRequest) (*downloaderv1.VpnStatusResponse, error) {
 	connected, iface, ip, gw, cfg, connectedAt, ks := m.vpn.status()

@@ -8,9 +8,11 @@ Native BitTorrent engine for MuxCore using [anacrolix/torrent](https://github.co
 
 - Real torrent client (magnets and HTTP(S) `.torrent` URLs)
 - Per-torrent progress via `GetTorrent` / `ListTorrents`
+- `PauseTorrent` / `ResumeTorrent` (local `TorrentService` and shared `contracts-downloader`)
 - Publishes `download.started`, `download.completed`, `download.failed` on the core event bus when mesh is connected
 - Seed until ratio ≥ 1.0 or 60 minutes (configurable), then leave the swarm and keep files
-- WireGuard VPN + kill switch and NAT-PMP (VPN traffic binding to the torrent socket is still TODO)
+- WireGuard VPN + kill switch and NAT-PMP; on VPN auto-start, torrent listen host rebinds to the WireGuard IP
+- Mesh `settings` capability (`download_path`, `listen_port`, `wg_conf`, `wg_kill_switch`)
 
 ## Configuration
 
@@ -25,11 +27,18 @@ Native BitTorrent engine for MuxCore using [anacrolix/torrent](https://github.co
 | `WG_KILL_SWITCH` | `false` | Enable VPN kill switch |
 | `NAT_PMP_PORT` | `0` | NAT-PMP port mapping |
 | `MUXCORE_GRPC_ADDR` | — | Core mesh (optional; required for download.* events) |
-| `MUXCORE_GRPC_INSECURE` | `false` | Disable TLS for local core |
+| `MUXCORE_INSECURE_DISABLE_TLS` | `false` | Disable TLS for local core |
 
-## Capability
+## Capabilities
 
-`downloader` — discovered by `media-automation` for `AddTorrent` dispatch.
+- `downloader` — discovered by `media-automation` for `AddTorrent` dispatch
+- `downloader.native.torrent`
+- `settings`
+
+## gRPC services
+
+- Local `muxcore.downloader.native.v1.TorrentService` (VPN / NAT-PMP helpers included)
+- Shared `contracts-downloader` `DownloaderService` adapter on the same listener
 
 ## Events
 
@@ -42,6 +51,7 @@ Native BitTorrent engine for MuxCore using [anacrolix/torrent](https://github.co
 ## Dependencies
 
 - `github.com/anacrolix/torrent` — BitTorrent engine
+- `github.com/Muxcore-Media/contracts-downloader` — shared Downloader contract
 - `github.com/Muxcore-Media/core` — SDK / contracts / mesh client
 - `golang.zx2c4.com/wireguard/wgctrl` — WireGuard control
 
