@@ -3,8 +3,14 @@
   "description": "Native BitTorrent engine (anacrolix/torrent) with WireGuard VPN and NAT-PMP support",
   "version": "0.2.0",
   "author": "MuxCore",
-  "roles": ["downloader"],
-  "capabilities": ["downloader", "downloader.native.torrent"],
+  "roles": [
+    "downloader"
+  ],
+  "capabilities": [
+    "downloader",
+    "downloader.native.torrent",
+    "settings"
+  ],
   "contracts": [
     {
       "repo": "github.com/Muxcore-Media/contracts-downloader",

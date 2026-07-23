@@ -1,5 +1,5 @@
 syntax = "proto3";
-package muxcore.downloader.v1;
+package muxcore.downloader.native.v1;
 option go_package = "github.com/Muxcore-Media/downloader-native-torrent/proto/downloaderv1;downloaderv1";
 
 service TorrentService {
@@ -7,6 +7,9 @@ service TorrentService {
   rpc RemoveTorrent(RemoveTorrentRequest) returns (RemoveTorrentResponse);
   rpc GetTorrent(GetTorrentRequest) returns (GetTorrentResponse);
   rpc ListTorrents(ListTorrentsRequest) returns (ListTorrentsResponse);
+  rpc PauseTorrent(PauseTorrentRequest) returns (PauseTorrentResponse);
+  rpc ResumeTorrent(ResumeTorrentRequest) returns (ResumeTorrentResponse);
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
   rpc VpnStatus(VpnStatusRequest) returns (VpnStatusResponse);
   rpc VpnStart(VpnStartRequest) returns (VpnStartResponse);
   rpc VpnStop(VpnStopRequest) returns (VpnStopResponse);
@@ -47,6 +50,31 @@ message ListTorrentsRequest {
 
 message ListTorrentsResponse {
   repeated TorrentInfo torrents = 1;
+}
+
+message PauseTorrentRequest {
+  string id = 1;
+}
+
+message PauseTorrentResponse {
+  bool success = 1;
+}
+
+message ResumeTorrentRequest {
+  string id = 1;
+}
+
+message ResumeTorrentResponse {
+  bool success = 1;
+}
+
+message GetCapabilitiesRequest {}
+
+message GetCapabilitiesResponse {
+  bool supports_categories = 1;
+  bool supports_pausing = 2;
+  bool supports_file_selection = 3;
+  repeated string supported_protocols = 4;
 }
 
 message TorrentInfo {

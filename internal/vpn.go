@@ -38,13 +38,14 @@ type parsedPeer struct {
 }
 
 type vpnManager struct {
-	mu          sync.RWMutex
-	configFile  string
-	ifaceName   string
-	localIP     string
-	connected   bool
-	connectedAt time.Time
-	killSwitch  bool
+	mu           sync.RWMutex
+	configFile   string
+	ifaceName    string
+	localIP      string
+	peerEndpoint string // host:port from WireGuard Peer.Endpoint
+	connected    bool
+	connectedAt  time.Time
+	killSwitch   bool
 }
 
 func newVPNManager() *vpnManager {
@@ -75,21 +76,26 @@ func (v *vpnManager) start(configPath string, enableKill bool) error {
 	}
 
 	localIP := getInterfaceIP(iface)
+	peerEP := ""
+	if len(cfg.Peers) > 0 {
+		peerEP = cfg.Peers[0].Endpoint
+	}
 
 	if enableKill {
-		if err := applyKillSwitch(); err != nil {
+		if err := applyKillSwitch(iface, peerEP); err != nil {
 			slog.Warn("vpn: kill switch setup failed", "error", err)
 		}
 	}
 
 	v.ifaceName = iface
 	v.localIP = localIP
+	v.peerEndpoint = peerEP
 	v.configFile = configPath
 	v.connected = true
 	v.connectedAt = time.Now()
 	v.killSwitch = enableKill
 
-	slog.Info("vpn: connected", "interface", iface, "ip", localIP)
+	slog.Info("vpn: connected", "interface", iface, "ip", localIP, "peer", peerEP)
 	return nil
 }
 
@@ -100,11 +106,12 @@ func (v *vpnManager) stop() error {
 		return nil
 	}
 	if v.killSwitch {
-		removeKillSwitch()
+		removeKillSwitch(v.ifaceName, v.peerEndpoint)
 	}
 	teardownInterface(v.ifaceName)
 	v.ifaceName = ""
 	v.localIP = ""
+	v.peerEndpoint = ""
 	v.configFile = ""
 	v.connected = false
 	v.killSwitch = false
@@ -241,27 +248,55 @@ func teardownInterface(iface string) {
 
 // ── Kill switch (iptables – no policy changes, host-safe) ───
 
-func applyKillSwitch() error {
+func applyKillSwitch(iface, peerEndpoint string) error {
 	_ = exec.Command("sh", "-c",
 		"echo 'nameserver 1.1.1.1\nnameserver 1.0.0.1' > /etc/resolv.conf",
 	).Run()
-	return iptables([][]string{
+	rules := [][]string{
 		{"--append", "OUTPUT", "-o", "lo", "-j", "ACCEPT"},
 		{"--append", "OUTPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"},
-		{"--append", "OUTPUT", "-d", "79.127.147.2", "-p", "udp", "--dport", "51820", "-j", "ACCEPT"},
-		{"--append", "OUTPUT", "-o", "wg-us-tx", "-j", "ACCEPT"},
-		{"--append", "OUTPUT", "-j", "DROP"},
-	})
+	}
+	if host, port, ok := splitEndpoint(peerEndpoint); ok {
+		rules = append(rules, []string{"--append", "OUTPUT", "-d", host, "-p", "udp", "--dport", port, "-j", "ACCEPT"})
+		rules = append(rules, []string{"--append", "OUTPUT", "-d", host, "-p", "tcp", "--dport", port, "-j", "ACCEPT"})
+	}
+	if iface != "" {
+		rules = append(rules, []string{"--append", "OUTPUT", "-o", iface, "-j", "ACCEPT"})
+	}
+	rules = append(rules, []string{"--append", "OUTPUT", "-j", "DROP"})
+	return iptables(rules)
 }
 
-func removeKillSwitch() {
-	iptables([][]string{
+func removeKillSwitch(iface, peerEndpoint string) {
+	rules := [][]string{
 		{"--delete", "OUTPUT", "-o", "lo", "-j", "ACCEPT"},
 		{"--delete", "OUTPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"},
-		{"--delete", "OUTPUT", "-d", "79.127.147.2", "-p", "udp", "--dport", "51820", "-j", "ACCEPT"},
-		{"--delete", "OUTPUT", "-o", "wg-us-tx", "-j", "ACCEPT"},
-		{"--delete", "OUTPUT", "-j", "DROP"},
-	})
+	}
+	if host, port, ok := splitEndpoint(peerEndpoint); ok {
+		rules = append(rules, []string{"--delete", "OUTPUT", "-d", host, "-p", "udp", "--dport", port, "-j", "ACCEPT"})
+		rules = append(rules, []string{"--delete", "OUTPUT", "-d", host, "-p", "tcp", "--dport", port, "-j", "ACCEPT"})
+	}
+	if iface != "" {
+		rules = append(rules, []string{"--delete", "OUTPUT", "-o", iface, "-j", "ACCEPT"})
+	}
+	rules = append(rules, []string{"--delete", "OUTPUT", "-j", "DROP"})
+	iptables(rules)
+}
+
+func splitEndpoint(endpoint string) (host, port string, ok bool) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", "", false
+	}
+	h, p, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return "", "", false
+	}
+	h = strings.Trim(h, "[]")
+	if h == "" || p == "" {
+		return "", "", false
+	}
+	return h, p, true
 }
 
 func iptables(rules [][]string) error {
