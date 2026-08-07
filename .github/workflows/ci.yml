@@ -17,10 +17,12 @@ jobs:
         with:
           path: core
           repository: Muxcore-Media/core
+          token: ${{ secrets.MUXCORE_CI_TOKEN }}
       - uses: actions/checkout@v7
         with:
           path: contracts-downloader
           repository: Muxcore-Media/contracts-downloader
+          token: ${{ secrets.MUXCORE_CI_TOKEN }}
       - uses: actions/checkout@v7
         with:
           path: downloader-native-torrent
@@ -41,10 +43,12 @@ jobs:
         with:
           path: core
           repository: Muxcore-Media/core
+          token: ${{ secrets.MUXCORE_CI_TOKEN }}
       - uses: actions/checkout@v7
         with:
           path: contracts-downloader
           repository: Muxcore-Media/contracts-downloader
+          token: ${{ secrets.MUXCORE_CI_TOKEN }}
       - uses: actions/checkout@v7
         with:
           path: downloader-native-torrent
@@ -62,10 +66,12 @@ jobs:
         with:
           path: core
           repository: Muxcore-Media/core
+          token: ${{ secrets.MUXCORE_CI_TOKEN }}
       - uses: actions/checkout@v7
         with:
           path: contracts-downloader
           repository: Muxcore-Media/contracts-downloader
+          token: ${{ secrets.MUXCORE_CI_TOKEN }}
       - uses: actions/checkout@v7
         with:
           path: downloader-native-torrent
@@ -87,10 +93,12 @@ jobs:
         with:
           path: core
           repository: Muxcore-Media/core
+          token: ${{ secrets.MUXCORE_CI_TOKEN }}
       - uses: actions/checkout@v7
         with:
           path: contracts-downloader
           repository: Muxcore-Media/contracts-downloader
+          token: ${{ secrets.MUXCORE_CI_TOKEN }}
       - uses: actions/checkout@v7
         with:
           path: downloader-native-torrent
