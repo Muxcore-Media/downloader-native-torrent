@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -192,13 +193,15 @@ func TestParseMagnetName(t *testing.T) {
 	}
 }
 
-func TestDownloadCompletesWithFakeEngine(t *testing.T) {
-	eng := &fakeEngine{instantComplete: true}
-	m := newTestModuleWithEngine(t, eng)
+func TestFixtureEngineWritesVideo(t *testing.T) {
+	dir := t.TempDir()
+	m := newTestModuleWithEngine(t, &fixtureEngine{})
+	m.dlDir = dir
 	ctx := context.Background()
 
 	add, err := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{
-		Uri: "magnet:?xt=urn:btih:GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG&dn=Progress",
+		Uri:      "magnet:?xt=urn:btih:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF&dn=Fight.Club.1999.1080p.BluRay",
+		SavePath: dir,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -211,8 +214,9 @@ func TestDownloadCompletesWithFakeEngine(t *testing.T) {
 			t.Fatal(err)
 		}
 		if get.Torrent.Status == "completed" {
-			if get.Torrent.Progress < 100 {
-				t.Errorf("completed but progress=%f", get.Torrent.Progress)
+			want := filepath.Join(dir, "Fight.Club.1999.1080p.BluRay", "Fight.Club.1999.1080p.BluRay.mkv")
+			if _, err := os.Stat(want); err != nil {
+				t.Fatalf("fixture file missing: %v", err)
 			}
 			return
 		}
@@ -223,6 +227,7 @@ func TestDownloadCompletesWithFakeEngine(t *testing.T) {
 	}
 	t.Fatal("timed out waiting for completed")
 }
+
 
 func TestAddTorrentPaused(t *testing.T) {
 	eng := &fakeEngine{instantComplete: true}
