@@ -2,8 +2,6 @@
 
 Native BitTorrent engine for MuxCore using [anacrolix/torrent](https://github.com/anacrolix/torrent), with optional WireGuard VPN and NAT-PMP.
 
-> **Note:** Default gRPC port `:9460` collides with `media-automation` if both run on one host — set `DOWNLOADER_GRPC_ADDR` (e.g. `:9461`) when needed.
-
 ## Key Features
 
 - Real torrent client (magnets and HTTP(S) `.torrent` URLs)
@@ -18,7 +16,7 @@ Native BitTorrent engine for MuxCore using [anacrolix/torrent](https://github.co
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| `DOWNLOADER_GRPC_ADDR` | `:9460` | gRPC listen address (registered as `HTTPAddr`) |
+| `DOWNLOADER_GRPC_ADDR` | `:9461` | gRPC listen address (registered as `HTTPAddr`) |
 | `DOWNLOAD_DIR` | `/var/lib/downloader-native-torrent/downloads` | Client data dir / default save path |
 | `TORRENT_LISTEN_PORT` | `6881` | BitTorrent listen port (falls back to `NAT_PMP_PORT` if set) |
 | `SEED_RATIO` | `1.0` | Stop seeding when uploaded/size reaches this ratio |
