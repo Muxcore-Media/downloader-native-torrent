@@ -93,7 +93,7 @@ func NewModule(cfg Config) *Module {
 		cfg.ID = "downloader-native-torrent"
 	}
 	if cfg.GRPCAddr == "" {
-		cfg.GRPCAddr = ":9460"
+		cfg.GRPCAddr = ":9461"
 	}
 	if cfg.DownloadDir == "" {
 		cfg.DownloadDir = "/var/lib/downloader-native-torrent/downloads"
