@@ -366,9 +366,12 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 
 	go m.runTorrent(runCtx, th, uri, req.GetPaused())
 
-	slog.Info("torrent added", "id", th.ID, "name", th.Name)
+	th.mu.RLock()
+	name, infoHash := th.Name, th.InfoHash
+	th.mu.RUnlock()
+	slog.Info("torrent added", "id", th.ID, "name", name)
 	return &downloaderv1.AddTorrentResponse{
-		Id: th.ID, Name: th.Name, InfoHash: th.InfoHash,
+		Id: th.ID, Name: name, InfoHash: infoHash,
 	}, nil
 }
 
