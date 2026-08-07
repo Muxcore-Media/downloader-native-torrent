@@ -186,11 +186,17 @@ func (m *Module) Init(ctx context.Context) error {
 		return fmt.Errorf("create download dir: %w", err)
 	}
 	if m.engine == nil {
-		eng, err := newAnacrolixEngine(m.dlDir, m.listenPort, "", nil)
-		if err != nil {
-			return err
+		switch os.Getenv("DOWNLOADER_ENGINE") {
+		case "fixture", "fake":
+			slog.Info("using fixture torrent engine (no network)")
+			m.engine = &fixtureEngine{}
+		default:
+			eng, err := newAnacrolixEngine(m.dlDir, m.listenPort, "", nil)
+			if err != nil {
+				return err
+			}
+			m.engine = eng
 		}
-		m.engine = eng
 	}
 	lis, err := net.Listen("tcp", m.grpcAddr)
 	if err != nil {
@@ -581,7 +587,7 @@ func (m *Module) publishDownloadEvent(eventType string, th *torrentHandle, errSt
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := mc.Events.Publish(ctx, eventType, m.id, data); err != nil {
-		slog.Debug("publish download event failed", "type", eventType, "error", err)
+		slog.Warn("publish download event failed", "type", eventType, "error", err)
 	}
 }
 
