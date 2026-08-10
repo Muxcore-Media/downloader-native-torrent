@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.2 (2026-08-09)
 
 - File selection priorities (`all` / `episodes` / `season_packs`) via `TORRENT_FILE_PRIORITY` and settings `file_priority`; skips samples/extras; `SupportsFileSelection=true`
 - DHT / PEX toggles (`TORRENT_ENABLE_DHT` / `TORRENT_ENABLE_PEX`, settings `enable_dht` / `enable_pex`; apply on client create/restart)
@@ -8,7 +8,11 @@
 - Register shared `contracts-downloader` `DownloaderService` alongside local proto
 - Rebind torrent listen host to WireGuard IP on VPN auto-start
 - Soften kill-switch rules to use WireGuard iface + peer endpoint
-- Mesh `settings` capability (`download_path`, `listen_port`, `wg_conf`, `wg_kill_switch`)
+- Mesh `settings` capability (`download_path`, `listen_port`, `wg_conf`, `wg_kill_switch`, `file_priority`, `enable_dht`, `enable_pex`)
+
+## v0.2.1 (2026-08-09)
+
+- Patch release for MVP host stack (see GitHub Release notes)
 
 ## v0.2.0
 
