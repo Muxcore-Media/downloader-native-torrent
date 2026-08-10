@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- File selection priorities (`all` / `episodes` / `season_packs`) via `TORRENT_FILE_PRIORITY` and settings `file_priority`; skips samples/extras; `SupportsFileSelection=true`
+- DHT / PEX toggles (`TORRENT_ENABLE_DHT` / `TORRENT_ENABLE_PEX`, settings `enable_dht` / `enable_pex`; apply on client create/restart)
 - Pause / Resume RPCs on local `TorrentService` and `contracts-downloader`
 - Register shared `contracts-downloader` `DownloaderService` alongside local proto
 - Rebind torrent listen host to WireGuard IP on VPN auto-start

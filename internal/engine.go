@@ -45,26 +45,47 @@ type anacrolixEngine struct {
 	dataDir    string
 	listenPort int
 	listenHost string
+	enableDHT  bool
+	enablePEX  bool
+}
+
+type anacrolixEngineOpts struct {
+	ListenHost string
+	EnableDHT  bool
+	EnablePEX  bool
 }
 
 func newAnacrolixEngine(dataDir string, listenPort int, listenHost string, hc *http.Client) (*anacrolixEngine, error) {
+	return newAnacrolixEngineOpts(dataDir, listenPort, hc, anacrolixEngineOpts{
+		ListenHost: listenHost,
+		EnableDHT:  true,
+		EnablePEX:  true,
+	})
+}
+
+func newAnacrolixEngineOpts(dataDir string, listenPort int, hc *http.Client, opts anacrolixEngineOpts) (*anacrolixEngine, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.DataDir = dataDir
 	cfg.ListenPort = listenPort
-	if listenHost != "" {
-		host := listenHost
+	if opts.ListenHost != "" {
+		host := opts.ListenHost
 		cfg.ListenHost = func(string) string { return host }
 	}
 	cfg.NoDefaultPortForwarding = true
 	cfg.Seed = true
+	cfg.NoDHT = !opts.EnableDHT
+	cfg.DisablePEX = !opts.EnablePEX
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("torrent client: %w", err)
 	}
-	return &anacrolixEngine{client: cl, http: hc, dataDir: dataDir, listenPort: listenPort, listenHost: listenHost}, nil
+	return &anacrolixEngine{
+		client: cl, http: hc, dataDir: dataDir, listenPort: listenPort, listenHost: opts.ListenHost,
+		enableDHT: opts.EnableDHT, enablePEX: opts.EnablePEX,
+	}, nil
 }
 
 func (e *anacrolixEngine) rebind(listenHost string) error {
@@ -84,6 +105,8 @@ func (e *anacrolixEngine) rebind(listenHost string) error {
 	cfg.ListenHost = func(string) string { return host }
 	cfg.NoDefaultPortForwarding = true
 	cfg.Seed = true
+	cfg.NoDHT = !e.enableDHT
+	cfg.DisablePEX = !e.enablePEX
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
 		return fmt.Errorf("torrent client rebind: %w", err)
@@ -194,6 +217,38 @@ func (a *anacrolixTorrent) Files() []fileInfo {
 }
 
 func (a *anacrolixTorrent) DownloadAll() { a.t.DownloadAll() }
+
+// ApplyFilePriorities selects which files to download based on mode (see filepriority.go).
+func (a *anacrolixTorrent) ApplyFilePriorities(mode string) {
+	files := a.t.Files()
+	if len(files) == 0 {
+		a.t.DownloadAll()
+		return
+	}
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.Path()
+	}
+	want := selectFilesToDownload(paths, mode)
+	any := false
+	for _, w := range want {
+		if w {
+			any = true
+			break
+		}
+	}
+	if !any || normalizeFilePriorityMode(mode) == filePriorityAll {
+		a.t.DownloadAll()
+		return
+	}
+	for i, f := range files {
+		if want[i] {
+			f.SetPriority(torrent.PiecePriorityNormal)
+		} else {
+			f.SetPriority(torrent.PiecePriorityNone)
+		}
+	}
+}
 
 func (a *anacrolixTorrent) PauseDownload() {
 	for _, f := range a.t.Files() {
