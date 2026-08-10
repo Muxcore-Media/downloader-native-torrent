@@ -4,17 +4,17 @@ go 1.26.4
 
 require (
 	github.com/Muxcore-Media/contracts-downloader v0.1.0
-	github.com/Muxcore-Media/core/pkg/contracts v0.5.0
-	github.com/Muxcore-Media/core/sdk/go/client v0.5.0
-	github.com/Muxcore-Media/core/sdk/go/module v0.5.0
+	github.com/Muxcore-Media/core/pkg/contracts v0.5.1
+	github.com/Muxcore-Media/core/sdk/go/client v0.5.1
+	github.com/Muxcore-Media/core/sdk/go/module v0.5.1
 	github.com/anacrolix/torrent v1.61.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 )
 
 require (
-	github.com/Muxcore-Media/core v0.5.0 // indirect
+	github.com/Muxcore-Media/core v0.5.1 // indirect
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
@@ -95,7 +95,7 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260610212136-7ab31c22f7ad // indirect
