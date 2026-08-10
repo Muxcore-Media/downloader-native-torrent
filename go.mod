@@ -4,9 +4,9 @@ go 1.26.4
 
 require (
 	github.com/Muxcore-Media/contracts-downloader v0.1.0
-	github.com/Muxcore-Media/core/pkg/contracts v0.5.1
+	github.com/Muxcore-Media/core/pkg/contracts v0.5.2
 	github.com/Muxcore-Media/core/sdk/go/client v0.5.1
-	github.com/Muxcore-Media/core/sdk/go/module v0.5.1
+	github.com/Muxcore-Media/core/sdk/go/module v0.5.2
 	github.com/anacrolix/torrent v1.61.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6
 	google.golang.org/grpc v1.82.1
