@@ -134,7 +134,7 @@ func (m *Module) resumeTorrent(id string) (bool, error) {
 	default:
 	}
 	if session != nil {
-		session.DownloadAll()
+		m.beginDownload(session)
 	}
 	return true, nil
 }

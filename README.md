@@ -19,6 +19,9 @@ Native BitTorrent engine for MuxCore using [anacrolix/torrent](https://github.co
 | `DOWNLOADER_GRPC_ADDR` | `:9461` | gRPC listen address (registered as `HTTPAddr`) |
 | `DOWNLOAD_DIR` | `/var/lib/downloader-native-torrent/downloads` | Client data dir / default save path |
 | `TORRENT_LISTEN_PORT` | `6881` | BitTorrent listen port (falls back to `NAT_PMP_PORT` if set) |
+| `TORRENT_FILE_PRIORITY` | `all` | File selection: `all`, `episodes` (prefer SxxEyy; skip samples/packs when episodes exist), `season_packs` |
+| `TORRENT_ENABLE_DHT` | `true` | Enable BitTorrent DHT (restart module after change via settings) |
+| `TORRENT_ENABLE_PEX` | `true` | Enable peer exchange |
 | `SEED_RATIO` | `1.0` | Stop seeding when uploaded/size reaches this ratio |
 | `SEED_MINUTES` | `60` | Max seeding time after complete |
 | `WG_CONF` | `""` | WireGuard config file path |
