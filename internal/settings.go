@@ -16,6 +16,9 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 	listenPort := m.listenPort
 	wgConf := m.wgConfPath
 	ks := m.wgKillSwitch
+	filePri := m.filePriorityMode
+	dht := m.enableDHT
+	pex := m.enablePEX
 	m.mu.RUnlock()
 	return []contracts.SettingDef{
 		{
@@ -37,6 +40,36 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 			Description: "BitTorrent listen port",
 			Required:    false,
 			Group:       "Downloads",
+		},
+		{
+			Key:         "file_priority",
+			Label:       "File selection priority",
+			Type:        contracts.SettingTypeString,
+			Default:     filePriorityAll,
+			Value:       filePri,
+			Description: "all | episodes (prefer SxxEyy, skip samples/packs when episodes exist) | season_packs (prefer season packs)",
+			Required:    false,
+			Group:       "Downloads",
+		},
+		{
+			Key:         "enable_dht",
+			Label:       "Enable DHT",
+			Type:        contracts.SettingTypeBool,
+			Default:     "true",
+			Value:       strconv.FormatBool(dht),
+			Description: "BitTorrent DHT peer discovery (applies on module restart)",
+			Required:    false,
+			Group:       "BitTorrent",
+		},
+		{
+			Key:         "enable_pex",
+			Label:       "Enable PEX",
+			Type:        contracts.SettingTypeBool,
+			Default:     "true",
+			Value:       strconv.FormatBool(pex),
+			Description: "Peer exchange (applies on module restart)",
+			Required:    false,
+			Group:       "BitTorrent",
 		},
 		{
 			Key:         "wg_conf",
@@ -79,6 +112,21 @@ func (m *Module) updateSetting(key, value string) error {
 		}
 		m.mu.Lock()
 		m.listenPort = p
+		m.mu.Unlock()
+		return nil
+	case "file_priority", "TORRENT_FILE_PRIORITY":
+		m.mu.Lock()
+		m.filePriorityMode = normalizeFilePriorityMode(value)
+		m.mu.Unlock()
+		return nil
+	case "enable_dht", "TORRENT_ENABLE_DHT":
+		m.mu.Lock()
+		m.enableDHT = envTruthyBool(value)
+		m.mu.Unlock()
+		return nil
+	case "enable_pex", "TORRENT_ENABLE_PEX":
+		m.mu.Lock()
+		m.enablePEX = envTruthyBool(value)
 		m.mu.Unlock()
 		return nil
 	case "wg_conf", "WG_CONF":

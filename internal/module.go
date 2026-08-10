@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,17 +31,25 @@ type Module struct {
 	engine torrentEngine
 	mc     *client.Client
 
-	id           string
-	grpcAddr     string
-	dlDir        string
-	listenPort   int
-	seedRatio    float64
-	seedMinutes  int
-	wgConfPath   string
-	wgKillSwitch bool
-	grpcSrv      *grpc.Server
-	lis          net.Listener
-	infoTimeout  time.Duration
+	id               string
+	grpcAddr         string
+	dlDir            string
+	listenPort       int
+	seedRatio        float64
+	seedMinutes      int
+	wgConfPath       string
+	wgKillSwitch     bool
+	filePriorityMode string
+	enableDHT        bool
+	enablePEX        bool
+	grpcSrv          *grpc.Server
+	lis              net.Listener
+	infoTimeout      time.Duration
+}
+
+// filePriorityApplier is optional on managedTorrent (anacrolix).
+type filePriorityApplier interface {
+	ApplyFilePriorities(mode string)
 }
 
 type torrentHandle struct {
@@ -75,17 +84,20 @@ type fileInfo struct {
 }
 
 type Config struct {
-	ID           string
-	GRPCAddr     string
-	DownloadDir  string
-	WGConfPath   string
-	WGKillSwitch bool
-	NatPMPPort   int
-	ListenPort   int
-	SeedRatio    float64
-	SeedMinutes  int
-	Engine       torrentEngine // optional; tests inject a fake
-	InfoTimeout  time.Duration
+	ID               string
+	GRPCAddr         string
+	DownloadDir      string
+	WGConfPath       string
+	WGKillSwitch     bool
+	NatPMPPort       int
+	ListenPort       int
+	SeedRatio        float64
+	SeedMinutes      int
+	FilePriorityMode string
+	EnableDHT        *bool // nil → env/default true
+	EnablePEX        *bool
+	Engine           torrentEngine // optional; tests inject a fake
+	InfoTimeout      time.Duration
 }
 
 func NewModule(cfg Config) *Module {
@@ -142,21 +154,53 @@ func NewModule(cfg Config) *Module {
 			cfg.SeedMinutes = m
 		}
 	}
+	filePri := normalizeFilePriorityMode(cfg.FilePriorityMode)
+	if cfg.FilePriorityMode == "" {
+		if v := os.Getenv("TORRENT_FILE_PRIORITY"); v != "" {
+			filePri = normalizeFilePriorityMode(v)
+		}
+	}
+	enableDHT := true
+	if cfg.EnableDHT != nil {
+		enableDHT = *cfg.EnableDHT
+	} else if v := os.Getenv("TORRENT_ENABLE_DHT"); v != "" {
+		enableDHT = envTruthyBool(v)
+	}
+	enablePEX := true
+	if cfg.EnablePEX != nil {
+		enablePEX = *cfg.EnablePEX
+	} else if v := os.Getenv("TORRENT_ENABLE_PEX"); v != "" {
+		enablePEX = envTruthyBool(v)
+	}
 
 	return &Module{
-		id:           cfg.ID,
-		grpcAddr:     cfg.GRPCAddr,
-		dlDir:        cfg.DownloadDir,
-		listenPort:   cfg.ListenPort,
-		seedRatio:    cfg.SeedRatio,
-		seedMinutes:  cfg.SeedMinutes,
-		infoTimeout:  cfg.InfoTimeout,
-		wgConfPath:   cfg.WGConfPath,
-		wgKillSwitch: cfg.WGKillSwitch,
-		engine:       cfg.Engine,
-		torrents:     make(map[string]*torrentHandle),
-		vpn:          newVPNManager(),
-		natPMP:       newNATPMPClient(),
+		id:               cfg.ID,
+		grpcAddr:         cfg.GRPCAddr,
+		dlDir:            cfg.DownloadDir,
+		listenPort:       cfg.ListenPort,
+		seedRatio:        cfg.SeedRatio,
+		seedMinutes:      cfg.SeedMinutes,
+		infoTimeout:      cfg.InfoTimeout,
+		wgConfPath:       cfg.WGConfPath,
+		wgKillSwitch:     cfg.WGKillSwitch,
+		filePriorityMode: filePri,
+		enableDHT:        enableDHT,
+		enablePEX:        enablePEX,
+		engine:           cfg.Engine,
+		torrents:         make(map[string]*torrentHandle),
+		vpn:              newVPNManager(),
+		natPMP:           newNATPMPClient(),
+	}
+}
+
+func envTruthyBool(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
 
@@ -191,7 +235,10 @@ func (m *Module) Init(ctx context.Context) error {
 			slog.Info("using fixture torrent engine (no network)")
 			m.engine = &fixtureEngine{}
 		default:
-			eng, err := newAnacrolixEngine(m.dlDir, m.listenPort, "", nil)
+			eng, err := newAnacrolixEngineOpts(m.dlDir, m.listenPort, nil, anacrolixEngineOpts{
+				EnableDHT: m.enableDHT,
+				EnablePEX: m.enablePEX,
+			})
 			if err != nil {
 				return err
 			}
@@ -204,7 +251,8 @@ func (m *Module) Init(ctx context.Context) error {
 	}
 	m.lis = lis
 	slog.Info("downloader-native-torrent initialized",
-		"addr", m.grpcAddr, "dir", m.dlDir, "listen_port", m.listenPort)
+		"addr", m.grpcAddr, "dir", m.dlDir, "listen_port", m.listenPort,
+		"file_priority", m.filePriorityMode, "dht", m.enableDHT, "pex", m.enablePEX)
 
 	go m.autoStartVPN()
 	return nil
@@ -415,7 +463,7 @@ func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, 
 		}
 	}
 
-	session.DownloadAll()
+	m.beginDownload(session)
 	th.mu.Lock()
 	th.Status = "downloading"
 	th.mu.Unlock()
@@ -687,11 +735,22 @@ func (m *Module) ResumeTorrent(_ context.Context, req *downloaderv1.ResumeTorren
 	return &downloaderv1.ResumeTorrentResponse{Success: ok}, nil
 }
 
+func (m *Module) beginDownload(session managedTorrent) {
+	m.mu.RLock()
+	mode := m.filePriorityMode
+	m.mu.RUnlock()
+	if ap, ok := session.(filePriorityApplier); ok {
+		ap.ApplyFilePriorities(mode)
+		return
+	}
+	session.DownloadAll()
+}
+
 func (m *Module) GetCapabilities(context.Context, *downloaderv1.GetCapabilitiesRequest) (*downloaderv1.GetCapabilitiesResponse, error) {
 	return &downloaderv1.GetCapabilitiesResponse{
 		SupportsCategories:    true,
 		SupportsPausing:       true,
-		SupportsFileSelection: false,
+		SupportsFileSelection: true,
 		SupportedProtocols:    []string{"torrent", "magnet"},
 	}, nil
 }
