@@ -9,16 +9,18 @@ Native BitTorrent engine for MuxCore using [anacrolix/torrent](https://github.co
 - `PauseTorrent` / `ResumeTorrent` (local `TorrentService` and shared `contracts-downloader`)
 - Publishes `download.started`, `download.completed`, `download.failed` on the core event bus when mesh is connected
 - Seed until ratio ≥ 1.0 or 60 minutes (configurable), then leave the swarm and keep files
-- WireGuard VPN + kill switch and NAT-PMP; on VPN auto-start, torrent listen host rebinds to the WireGuard IP
+- WireGuard VPN + kill switch and Proton NAT-PMP; after handshake the client maps UDP+TCP, then rebinds listen host/port to the WireGuard IPv4 address and the assigned port
 - Mesh `settings` capability (`download_path`, `listen_port`, `wg_conf`, `wg_kill_switch`)
 
 ## Configuration
+
+Proton WireGuard configs with `# NAT-PMP (Port Forwarding) = on` trigger a map to `10.2.0.1:5351` (UDP then TCP, 60s lease, renew every 45s). Proton assigns a random port; the torrent client is rebound to the WireGuard IPv4 address on that port. `TORRENT_LISTEN_PORT` is only used when NAT-PMP is off or the map fails.
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
 | `DOWNLOADER_GRPC_ADDR` | `:9461` | gRPC listen address (registered as `HTTPAddr`) |
 | `DOWNLOAD_DIR` | `/var/lib/downloader-native-torrent/downloads` | Client data dir / default save path |
-| `TORRENT_LISTEN_PORT` | `6881` | BitTorrent listen port (falls back to `NAT_PMP_PORT` if set) |
+| `TORRENT_LISTEN_PORT` | `6881` | Fallback BitTorrent listen port when NAT-PMP is off or mapping fails (also used if `NAT_PMP_PORT` is set and this is unset) |
 | `TORRENT_FILE_PRIORITY` | `all` | File selection: `all`, `episodes` (prefer SxxEyy; skip samples/packs when episodes exist), `season_packs` |
 | `TORRENT_ENABLE_DHT` | `true` | Enable BitTorrent DHT (restart module after change via settings) |
 | `TORRENT_ENABLE_PEX` | `true` | Enable peer exchange |
@@ -26,7 +28,7 @@ Native BitTorrent engine for MuxCore using [anacrolix/torrent](https://github.co
 | `SEED_MINUTES` | `60` | Max seeding time after complete |
 | `WG_CONF` | `""` | WireGuard config file path |
 | `WG_KILL_SWITCH` | `false` | Enable VPN kill switch |
-| `NAT_PMP_PORT` | `0` | NAT-PMP port mapping |
+| `NAT_PMP_PORT` | `0` | Not sent to Proton. Optional fallback listen port if `TORRENT_LISTEN_PORT` is unset. Proton assigns a random 60s port via NAT-PMP (`10.2.0.1:5351`); the downloader listens on that port and renews every 45s |
 | `MUXCORE_GRPC_ADDR` | — | Core mesh (optional; required for download.* events) |
 | `MUXCORE_INSECURE_DISABLE_TLS` | `false` | Disable TLS for local core |
 
