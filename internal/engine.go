@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -67,52 +68,76 @@ func newAnacrolixEngineOpts(dataDir string, listenPort int, hc *http.Client, opt
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
-	cfg := torrent.NewDefaultClientConfig()
-	cfg.DataDir = dataDir
-	cfg.ListenPort = listenPort
-	if opts.ListenHost != "" {
-		host := opts.ListenHost
-		cfg.ListenHost = func(string) string { return host }
+	e := &anacrolixEngine{
+		http: hc, dataDir: dataDir, listenPort: listenPort, listenHost: opts.ListenHost,
+		enableDHT: opts.EnableDHT, enablePEX: opts.EnablePEX,
 	}
-	cfg.NoDefaultPortForwarding = true
-	cfg.Seed = true
-	cfg.NoDHT = !opts.EnableDHT
-	cfg.DisablePEX = !opts.EnablePEX
-	cl, err := torrent.NewClient(cfg)
+	cl, err := e.newClient(opts.ListenHost, listenPort)
 	if err != nil {
 		return nil, fmt.Errorf("torrent client: %w", err)
 	}
-	return &anacrolixEngine{
-		client: cl, http: hc, dataDir: dataDir, listenPort: listenPort, listenHost: opts.ListenHost,
-		enableDHT: opts.EnableDHT, enablePEX: opts.EnablePEX,
-	}, nil
+	e.client = cl
+	return e, nil
 }
 
-func (e *anacrolixEngine) rebind(listenHost string) error {
-	if e == nil {
-		return fmt.Errorf("engine nil")
+func applyListenConfig(cfg *torrent.ClientConfig, host string, port int) {
+	cfg.ListenPort = port
+	cfg.NoDefaultPortForwarding = true
+	if host == "" {
+		return
 	}
-	if listenHost == e.listenHost {
-		return nil
+	h := host
+	ipv4Only := isIPv4Host(h)
+	if ipv4Only {
+		cfg.DisableIPv6 = true
 	}
-	if e.client != nil {
-		e.client.Close()
+	cfg.ListenHost = func(network string) string {
+		if ipv4Only && strings.Contains(network, "6") {
+			return ""
+		}
+		return h
 	}
+}
+
+func isIPv4Host(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() != nil
+}
+
+func (e *anacrolixEngine) newClient(host string, port int) (*torrent.Client, error) {
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.DataDir = e.dataDir
-	cfg.ListenPort = e.listenPort
-	host := listenHost
-	cfg.ListenHost = func(string) string { return host }
-	cfg.NoDefaultPortForwarding = true
 	cfg.Seed = true
 	cfg.NoDHT = !e.enableDHT
 	cfg.DisablePEX = !e.enablePEX
-	cl, err := torrent.NewClient(cfg)
+	applyListenConfig(cfg, host, port)
+	return torrent.NewClient(cfg)
+}
+
+// rebind replaces the torrent client to listen on host:port. The previous client is
+// kept until the new one starts successfully. listenPort 0 keeps the current port.
+func (e *anacrolixEngine) rebind(listenHost string, listenPort int) error {
+	if e == nil {
+		return fmt.Errorf("engine nil")
+	}
+	port := e.listenPort
+	if listenPort > 0 {
+		port = listenPort
+	}
+	if listenHost == e.listenHost && port == e.listenPort && e.client != nil {
+		return nil
+	}
+	cl, err := e.newClient(listenHost, port)
 	if err != nil {
 		return fmt.Errorf("torrent client rebind: %w", err)
 	}
+	old := e.client
 	e.client = cl
 	e.listenHost = listenHost
+	e.listenPort = port
+	if old != nil {
+		old.Close()
+	}
 	return nil
 }
 

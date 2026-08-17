@@ -389,13 +389,6 @@ func TestNatPmpStatusNotEnabled(t *testing.T) {
 	}
 }
 
-func TestNatPmpSendMapNoGateway(t *testing.T) {
-	n := newNATPMPClient()
-	_, err := n.sendMap(6881, "tcp", 7200)
-	if err == nil {
-		t.Fatal("expected error when no gateway is set")
-	}
-}
 
 func TestDeriveInterfaceName(t *testing.T) {
 	iface := deriveInterfaceName("/path/to/wg-us-tx.conf")

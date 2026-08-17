@@ -280,37 +280,48 @@ func (m *Module) autoStartVPN() {
 	}
 
 	_, iface, localIP, _, _, _, _ := m.vpn.status()
-	if localIP != "" {
-		if eng, ok := m.engine.(*anacrolixEngine); ok {
-			if err := eng.rebind(localIP); err != nil {
-				slog.Warn("vpn: bind torrent client to wireguard ip failed", "ip", localIP, "error", err)
-			} else {
-				slog.Info("torrent client bound to wireguard", "interface", iface, "ip", localIP)
-			}
-		}
-	}
+	m.bindAfterVPN(cfgPath, iface, localIP, 0, false)
+}
 
-	portStr := os.Getenv("NAT_PMP_PORT")
-	cfgData, _ := os.ReadFile(cfgPath)
-	if portStr != "" || hasNATPMPEnabled(string(cfgData)) {
-		var port int
-		if portStr != "" {
-			fmt.Sscanf(portStr, "%d", &port)
-		} else {
-			port = 6881
-		}
-		if port > 0 {
-			_, _, _, gw, _, _, _ := m.vpn.status()
-			if gw == "" {
-				gw = "10.2.0.1"
-			}
-			if err := m.natPMP.start(gw, port, "tcp"); err != nil {
-				slog.Warn("auto-start nat-pmp failed", "error", err)
-			} else {
-				slog.Info("nat-pmp port mapping active", "internal_port", port)
-			}
-		}
+// bindAfterVPN maps a Proton NAT-PMP port when the conf enables it (or forceNATPMP),
+// then rebinds the torrent client to the WireGuard IPv4 address and assigned listen port.
+// fallbackPort 0 uses m.listenPort (TORRENT_LISTEN_PORT, default 6881).
+func (m *Module) bindAfterVPN(cfgPath, iface, localIP string, fallbackPort int, forceNATPMP bool) {
+	if fallbackPort <= 0 {
+		fallbackPort = m.listenPort
 	}
+	cfgData, _ := os.ReadFile(cfgPath)
+	if forceNATPMP || hasNATPMPEnabled(string(cfgData)) {
+		gw := natPMPGateway(parseConfig(string(cfgData)))
+		m.natPMP.setOnPortChange(func(p int) {
+			m.rebindTorrent(localIP, p, iface)
+		})
+		if err := m.natPMP.start(gw, localIP); err != nil {
+			slog.Warn("auto-start nat-pmp failed", "error", err)
+			m.rebindTorrent(localIP, fallbackPort, iface)
+			return
+		}
+		return
+	}
+	m.rebindTorrent(localIP, fallbackPort, iface)
+}
+
+func (m *Module) rebindTorrent(host string, port int, iface string) {
+	if host == "" || port <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.listenPort = port
+	m.mu.Unlock()
+	eng, ok := m.engine.(*anacrolixEngine)
+	if !ok {
+		return
+	}
+	if err := eng.rebind(host, port); err != nil {
+		slog.Warn("vpn: bind torrent client to wireguard ip failed", "ip", host, "port", port, "error", err)
+		return
+	}
+	slog.Info("torrent client bound to wireguard", "interface", iface, "ip", host, "port", port)
 }
 
 func (m *Module) Start(ctx context.Context) error {
@@ -788,22 +799,9 @@ func (m *Module) VpnStart(ctx context.Context, req *downloaderv1.VpnStartRequest
 		}, nil
 	}
 
-	_, _, ip, _, _, _, _ := m.vpn.status()
-	_, iface, _, _, _, _, _ := m.vpn.status()
-
-	if req.GetEnableNatPmp() && req.GetTorrentListenPort() > 0 {
-		cfgData, err := os.ReadFile(configFile)
-		gw := ""
-		if err == nil {
-			gw = parseConfig(string(cfgData)).Interface.DNS[0]
-		}
-		if gw == "" {
-			gw = "10.2.0.1"
-		}
-		if err := m.natPMP.start(gw, int(req.GetTorrentListenPort()), "tcp"); err != nil {
-			slog.Warn("vpn: nat-pmp start failed", "error", err)
-		}
-	}
+	_, iface, ip, _, _, _, _ := m.vpn.status()
+	fallback := int(req.GetTorrentListenPort())
+	m.bindAfterVPN(configFile, iface, ip, fallback, req.GetEnableNatPmp())
 
 	return &downloaderv1.VpnStartResponse{
 		Started:       true,
