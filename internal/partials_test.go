@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+func TestJoinSaveAndRelPathNoDoubleJoin(t *testing.T) {
+	t.Parallel()
+	got := joinSaveAndRelPath("/data/downloads/partials/item1", "partials/item1/Show.mkv")
+	if got != "/data/downloads/partials/item1/Show.mkv" {
+		t.Fatalf("got %q", got)
+	}
+	got = joinSaveAndRelPath("/downloads/Show", "Show/S01E01.mkv")
+	if got != "/downloads/Show/S01E01.mkv" {
+		t.Fatalf("dir prefix %q", got)
+	}
+	got = joinSaveAndRelPath("/downloads", "Show/S01E01.mkv")
+	if got != "/downloads/Show/S01E01.mkv" {
+		t.Fatalf("plain join %q", got)
+	}
+}
+
 func TestResolveSavePathRelative(t *testing.T) {
 	got := resolveSavePath("/data/downloads", "partials/mv/btih_abc")
 	want := filepath.Join("/data/downloads", "partials/mv/btih_abc")

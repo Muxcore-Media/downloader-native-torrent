@@ -208,7 +208,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Downloader Native Torrent",
-		Version:      "0.2.8",
+		Version:      "0.2.9",
 		Roles:        []string{"downloader"},
 		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
@@ -700,10 +700,7 @@ func (m *Module) publishDownloadEvent(eventType string, th *torrentHandle, errSt
 		Error:    errStr,
 	}
 	for _, f := range th.Files {
-		p := f.Path
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(savePath, p)
-		}
+		p := joinSaveAndRelPath(savePath, f.Path)
 		payload.Files = append(payload.Files, contracts.DownloadEventFile{Path: p, Size: f.Size})
 	}
 	th.mu.RUnlock()
@@ -755,11 +752,7 @@ func (m *Module) RemoveTorrent(ctx context.Context, req *downloaderv1.RemoveTorr
 
 func (m *Module) deleteTorrentData(savePath, name string, files []fileInfo) {
 	for _, f := range files {
-		p := f.Path
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(savePath, p)
-		}
-		_ = os.RemoveAll(p)
+		_ = os.RemoveAll(joinSaveAndRelPath(savePath, f.Path))
 	}
 	if name != "" {
 		_ = os.RemoveAll(filepath.Join(savePath, name))
