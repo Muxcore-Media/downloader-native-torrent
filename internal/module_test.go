@@ -72,6 +72,52 @@ func TestAddTorrentMagnet(t *testing.T) {
 	}
 }
 
+func TestAddTorrentRelativeSavePath(t *testing.T) {
+	m := newTestModule(t)
+	resp, err := m.AddTorrent(context.Background(), &downloaderv1.AddTorrentRequest{
+		Uri:      "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&dn=Rel",
+		SavePath: "partials/mv/btih_aa",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.GetTorrent(context.Background(), &downloaderv1.GetTorrentRequest{Id: resp.Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(m.dlDir, "partials/mv/btih_aa")
+	if got.GetTorrent().GetSavePath() != want {
+		t.Fatalf("save path %q want %q", got.GetTorrent().GetSavePath(), want)
+	}
+}
+
+func TestAddTorrentReusesInfoHash(t *testing.T) {
+	m := newTestModule(t)
+	ctx := context.Background()
+	first, err := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{
+		Uri: "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&dn=One&tr=udp://a.example:80/announce",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{
+		Uri: "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&dn=One&tr=udp://c.example:80/announce",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Id != second.Id {
+		t.Fatalf("ids %q vs %q", first.Id, second.Id)
+	}
+	list, err := m.ListTorrents(ctx, &downloaderv1.ListTorrentsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Torrents) != 1 {
+		t.Fatalf("torrents %d", len(list.Torrents))
+	}
+}
+
 func TestAddTorrentEmptyURI(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()

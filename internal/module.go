@@ -208,7 +208,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Downloader Native Torrent",
-		Version:      "0.2.0",
+		Version:      "0.2.3",
 		Roles:        []string{"downloader"},
 		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
@@ -402,9 +402,18 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 	if _, err := classifyURI(uri); err != nil {
 		return nil, err
 	}
-	savePath := req.GetSavePath()
-	if savePath == "" {
-		savePath = m.dlDir
+	savePath := resolveSavePath(m.dlDir, req.GetSavePath())
+	if hash := strings.ToLower(parseInfoHash(uri)); hash != "" {
+		if existing := m.findHandleByInfoHash(hash); existing != nil {
+			if _, err := m.engine.AddURI(ctx, uri, existing.SavePath); err != nil {
+				slog.Debug("merge trackers for existing torrent", "hash", hash, "error", err)
+			}
+			existing.mu.RLock()
+			name, infoHash := existing.Name, existing.InfoHash
+			id := existing.ID
+			existing.mu.RUnlock()
+			return &downloaderv1.AddTorrentResponse{Id: id, Name: name, InfoHash: infoHash}, nil
+		}
 	}
 	if err := os.MkdirAll(savePath, 0755); err != nil {
 		return nil, fmt.Errorf("create save path: %w", err)
@@ -440,6 +449,36 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 	}, nil
 }
 
+func (m *Module) findHandleByInfoHash(hash string) *torrentHandle {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if hash == "" {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, th := range m.torrents {
+		th.mu.RLock()
+		h := strings.ToLower(th.InfoHash)
+		st := th.Status
+		th.mu.RUnlock()
+		if h == hash && (st == "queued" || st == "downloading" || st == "paused") {
+			return th
+		}
+	}
+	return nil
+}
+
+func pieceLayoutOf(session managedTorrent) (pieceLayout, bool) {
+	type provider interface {
+		PieceLayout() (pieceLayout, bool)
+	}
+	p, ok := session.(provider)
+	if !ok {
+		return pieceLayout{}, false
+	}
+	return p.PieceLayout()
+}
+
 func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, paused bool) {
 	defer close(th.done)
 
@@ -460,6 +499,30 @@ func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, 
 		return
 	}
 	m.syncHandleFromTorrent(th, session)
+	if layout, ok := pieceLayoutOf(session); ok {
+		if linked, err := tryLinkSiblingPartials(th.SavePath, layout); err != nil {
+			slog.Debug("sibling partial link", "error", err)
+		} else if linked {
+			session.Drop()
+			session, err = m.engine.AddURI(ctx, uri, th.SavePath)
+			if err != nil {
+				m.failTorrent(th, err)
+				return
+			}
+			th.mu.Lock()
+			th.session = session
+			th.mu.Unlock()
+			relinkCtx, relinkCancel := context.WithTimeout(ctx, m.infoTimeout)
+			if err := session.WaitInfo(relinkCtx); err != nil {
+				relinkCancel()
+				session.Drop()
+				m.failTorrent(th, fmt.Errorf("wait metadata: %w", err))
+				return
+			}
+			relinkCancel()
+			m.syncHandleFromTorrent(th, session)
+		}
+	}
 
 	if paused {
 		th.mu.Lock()
