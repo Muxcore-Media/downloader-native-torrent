@@ -201,3 +201,37 @@ func TestRebindUpdatesHostAndPort(t *testing.T) {
 		t.Errorf("listenHost=%s", eng.listenHost)
 	}
 }
+
+func TestPieceCompletionOpensAfterCleanClose(t *testing.T) {
+	dir := t.TempDir()
+	opts := anacrolixEngineOpts{EnableDHT: false, EnablePEX: false, ListenHost: "127.0.0.1"}
+	eng, err := newAnacrolixEngineOpts(dir, 0, nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Close(); err != nil {
+		t.Fatal(err)
+	}
+	eng2, err := newAnacrolixEngineOpts(dir, 0, nil, opts)
+	if err != nil {
+		t.Fatalf("second engine on same dir: %v", err)
+	}
+	defer eng2.Close()
+}
+
+func TestRebindReusesPieceCompletion(t *testing.T) {
+	eng, err := newAnacrolixEngineOpts(t.TempDir(), 0, nil, anacrolixEngineOpts{
+		EnableDHT: false, EnablePEX: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	st := eng.storage
+	if err := eng.rebind("127.0.0.1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if eng.storage != st {
+		t.Fatal("rebind must keep the same piece-completion storage")
+	}
+}
