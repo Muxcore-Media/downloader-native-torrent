@@ -208,7 +208,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Downloader Native Torrent",
-		Version:      "0.2.10",
+		Version:      "0.2.11",
 		Roles:        []string{"downloader"},
 		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
@@ -499,6 +499,11 @@ func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, 
 		return
 	}
 	m.syncHandleFromTorrent(th, session)
+	session, err = m.relocatePendingAfterMetadata(ctx, th, session, uri)
+	if err != nil {
+		m.failTorrent(th, err)
+		return
+	}
 	if layout, ok := pieceLayoutOf(session); ok {
 		if linked, err := tryLinkSiblingPartials(th.SavePath, layout); err != nil {
 			slog.Debug("sibling partial link", "error", err)
@@ -608,6 +613,43 @@ func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, 
 			}
 		}
 	}
+}
+
+func (m *Module) relocatePendingAfterMetadata(ctx context.Context, th *torrentHandle, session managedTorrent, uri string) (managedTorrent, error) {
+	th.mu.RLock()
+	cur, hash := th.SavePath, th.InfoHash
+	th.mu.RUnlock()
+	dest, ok := hashPartialDest(cur, hash)
+	if !ok {
+		return session, nil
+	}
+	session.Drop()
+	if err := movePendingPartial(cur, dest); err != nil {
+		slog.Warn("rename pending partial", "from", cur, "to", dest, "error", err)
+		dest = cur
+	} else {
+		th.mu.Lock()
+		th.SavePath = dest
+		th.mu.Unlock()
+		if dest != cur {
+			slog.Info("renamed pending partial to infohash", "from", cur, "to", dest)
+		}
+	}
+	session, err := m.engine.AddURI(ctx, uri, dest)
+	if err != nil {
+		return nil, err
+	}
+	th.mu.Lock()
+	th.session = session
+	th.mu.Unlock()
+	infoCtx, cancel := context.WithTimeout(ctx, m.infoTimeout)
+	defer cancel()
+	if err := session.WaitInfo(infoCtx); err != nil {
+		session.Drop()
+		return nil, fmt.Errorf("wait metadata: %w", err)
+	}
+	m.syncHandleFromTorrent(th, session)
+	return session, nil
 }
 
 func (m *Module) syncHandleFromTorrent(th *torrentHandle, session managedTorrent) {

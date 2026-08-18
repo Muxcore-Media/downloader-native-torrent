@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.11 (2026-08-18)
+
+- After metadata, `pending_*` save dirs under `partials/{item}/` are renamed to `btih_{infohash}`. Same-hash resume reuses an existing `btih_*` dir. Download events then persist the short identity.
+
 ## v0.2.10 (2026-08-18)
 
 - Piece-completion DB is opened once per engine and reused across VPN rebind, with retries on lock timeout. A clean stop/start no longer logs `couldn't open piece completion db … timeout` or fall back to in-memory completion.

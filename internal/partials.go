@@ -30,6 +30,47 @@ func isPartialsSavePath(savePath string) bool {
 	return filepath.Base(filepath.Dir(parent)) == "partials"
 }
 
+func hashPartialDest(savePath, infoHash string) (string, bool) {
+	savePath = filepath.Clean(strings.TrimSpace(savePath))
+	infoHash = strings.ToLower(strings.TrimSpace(infoHash))
+	if savePath == "" || savePath == "." || infoHash == "" || !isPartialsSavePath(savePath) {
+		return "", false
+	}
+	base := filepath.Base(savePath)
+	if strings.HasPrefix(base, "btih_") || strings.HasPrefix(base, "btmh_") {
+		return "", false
+	}
+	if !strings.HasPrefix(base, "pending_") {
+		return "", false
+	}
+	dest := filepath.Join(filepath.Dir(savePath), "btih_"+infoHash)
+	if dest == savePath {
+		return "", false
+	}
+	return dest, true
+}
+
+func movePendingPartial(from, to string) error {
+	from = filepath.Clean(from)
+	to = filepath.Clean(to)
+	if from == "" || to == "" || from == to {
+		return nil
+	}
+	if _, err := os.Stat(to); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(to), 0755); err != nil {
+		return err
+	}
+	if err := os.Rename(from, to); err != nil {
+		if _, statErr := os.Stat(to); statErr == nil {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func layoutFingerprint(files []fileInfo) string {
 	sizes := make([]string, 0, len(files))
 	var total int64
