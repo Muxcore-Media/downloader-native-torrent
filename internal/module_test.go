@@ -91,6 +91,42 @@ func TestAddTorrentRelativeSavePath(t *testing.T) {
 	}
 }
 
+func TestPendingSavePathRenamesToInfoHash(t *testing.T) {
+	m := newTestModule(t)
+	pending := filepath.Join(m.dlDir, "partials", "mv1", "pending_https___indexer.example_download.php_id_99")
+	add, err := m.AddTorrent(context.Background(), &downloaderv1.AddTorrentRequest{
+		Uri:      "https://indexer.example/download.php?id=99",
+		SavePath: pending,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(m.dlDir, "partials", "mv1", "btih_ffffffffffffffffffffffffffffffffffffffff")
+	deadline := time.Now().Add(3 * time.Second)
+	var gotPath string
+	for time.Now().Before(deadline) {
+		get, err := m.GetTorrent(context.Background(), &downloaderv1.GetTorrentRequest{Id: add.Id})
+		if err != nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		gotPath = get.GetTorrent().GetSavePath()
+		if gotPath == want {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if gotPath != want {
+		t.Fatalf("save path %q want %q", gotPath, want)
+	}
+	if _, err := os.Stat(pending); !os.IsNotExist(err) {
+		t.Fatal("pending dir still present")
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("btih dir missing: %v", err)
+	}
+}
+
 func TestAddTorrentReusesInfoHash(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()

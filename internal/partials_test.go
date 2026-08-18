@@ -8,6 +8,55 @@ import (
 	"testing"
 )
 
+func TestHashPartialDest(t *testing.T) {
+	t.Parallel()
+	pending := "/data/downloads/partials/mv1/pending_https___example_com_long"
+	got, ok := hashPartialDest(pending, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if !ok {
+		t.Fatal("expected dest")
+	}
+	want := "/data/downloads/partials/mv1/btih_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if _, ok := hashPartialDest(want, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); ok {
+		t.Fatal("already-canonical path should not rename")
+	}
+	if _, ok := hashPartialDest("/data/downloads/Show", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); ok {
+		t.Fatal("non-partials path should not rename")
+	}
+}
+
+func TestMovePendingPartial(t *testing.T) {
+	root := t.TempDir()
+	from := filepath.Join(root, "partials", "mv1", "pending_https_x")
+	to := filepath.Join(root, "partials", "mv1", "btih_abc")
+	if err := os.MkdirAll(from, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(from, "f"), []byte("n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := movePendingPartial(from, to); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(to, "f")); err != nil {
+		t.Fatalf("moved file missing: %v", err)
+	}
+	if _, err := os.Stat(from); !os.IsNotExist(err) {
+		t.Fatal("source still present")
+	}
+	if err := os.MkdirAll(from, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := movePendingPartial(from, to); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(to, "f")); err != nil {
+		t.Fatal("existing dest lost")
+	}
+}
+
 func TestJoinSaveAndRelPathNoDoubleJoin(t *testing.T) {
 	t.Parallel()
 	got := joinSaveAndRelPath("/data/downloads/partials/item1", "partials/item1/Show.mkv")
