@@ -324,6 +324,48 @@ func resolveSavePath(dataDir, savePath string) string {
 	return abs
 }
 
+func joinSaveAndRelPath(savePath, file string) string {
+	savePath = filepath.Clean(strings.TrimSpace(savePath))
+	file = strings.TrimSpace(file)
+	if file == "" {
+		if savePath == "." {
+			return ""
+		}
+		return savePath
+	}
+	file = filepath.Clean(file)
+	if filepath.IsAbs(file) {
+		return file
+	}
+	if savePath == "" || savePath == "." {
+		return file
+	}
+	saveSlash := filepath.ToSlash(savePath)
+	fileSlash := filepath.ToSlash(file)
+	if fileSlash == saveSlash || strings.HasPrefix(fileSlash, saveSlash+"/") {
+		return file
+	}
+	parts := strings.Split(saveSlash, "/")
+	for i := 0; i < len(parts); i++ {
+		if parts[i] == "" {
+			continue
+		}
+		suffix := strings.Join(parts[i:], "/")
+		if fileSlash != suffix && !strings.HasPrefix(fileSlash, suffix+"/") {
+			continue
+		}
+		prefix := strings.Join(parts[:i], "/")
+		if prefix == "" {
+			if filepath.IsAbs(savePath) {
+				return filepath.Clean(filepath.Join(string(filepath.Separator), file))
+			}
+			return file
+		}
+		return filepath.Clean(filepath.Join(filepath.FromSlash(prefix), file))
+	}
+	return filepath.Clean(filepath.Join(savePath, file))
+}
+
 func pathInsideRoot(root, p string) bool {
 	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(p))
 	if err != nil {
