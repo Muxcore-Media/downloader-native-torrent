@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +20,29 @@ func TestResolveSavePathRelative(t *testing.T) {
 	abs := filepath.Join(t.TempDir(), "abs")
 	if resolveSavePath("/data/downloads", abs) != abs {
 		t.Fatal("abs")
+	}
+}
+
+func TestResolveSavePathNeverCwdOrEscape(t *testing.T) {
+	dataDir := t.TempDir()
+	got := resolveSavePath(dataDir, "partials/mv/btih_abc")
+	if !filepath.IsAbs(got) {
+		t.Fatalf("not absolute: %q", got)
+	}
+	if !strings.HasPrefix(got, dataDir) {
+		t.Fatalf("%q not under dataDir %q", got, dataDir)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwdPartials := filepath.Join(cwd, "partials")
+	if got == cwdPartials || strings.HasPrefix(got, cwdPartials+string(filepath.Separator)) {
+		t.Fatalf("resolved to cwd partials: %q", got)
+	}
+	escaped := resolveSavePath(dataDir, filepath.Join("..", "outside"))
+	if escaped != filepath.Clean(dataDir) {
+		t.Fatalf("escape clamped to dataDir, got %q", escaped)
 	}
 }
 

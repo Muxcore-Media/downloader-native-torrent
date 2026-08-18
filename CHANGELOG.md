@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.8 (2026-08-18)
+
+- Relative `save_path` is always joined to the download dir and cleaned; paths that would escape (`../outside`) are clamped to the download dir so torrents never land in process cwd.
+
 ## v0.2.7 (2026-08-18)
 
 - Download events always emit an absolute `save_path` and file paths (relative `partials/…` joined with the download dir) so scanner ImportPath stays under the watch directory.

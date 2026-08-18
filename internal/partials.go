@@ -303,12 +303,31 @@ func linkOrCopy(src, dst string) error {
 }
 
 func resolveSavePath(dataDir, savePath string) string {
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir != "" {
+		dataDir = filepath.Clean(dataDir)
+	}
 	savePath = strings.TrimSpace(savePath)
 	if savePath == "" {
 		return dataDir
 	}
 	if filepath.IsAbs(savePath) {
-		return savePath
+		return filepath.Clean(savePath)
 	}
-	return filepath.Join(dataDir, savePath)
+	if dataDir == "" {
+		return filepath.Clean(savePath)
+	}
+	abs := filepath.Clean(filepath.Join(dataDir, savePath))
+	if !pathInsideRoot(dataDir, abs) {
+		return dataDir
+	}
+	return abs
+}
+
+func pathInsideRoot(root, p string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(p))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
