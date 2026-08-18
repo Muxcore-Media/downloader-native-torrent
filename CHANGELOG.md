@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.3 (2026-08-18)
+
+- Relative `save_path` is joined with the download dir (automation `partials/{item}/{hash}`).
+- Adding a magnet whose infohash is already active merges trackers onto the existing torrent instead of a second session.
+- After metadata, sibling dirs under `partials/{item}/` with the same file-size fingerprint are piece-verified; matching bytes are hardlinked (copy fallback) then rechecked.
+
 ## v0.2.2 (2026-08-09)
 
 - File selection priorities (`all` / `episodes` / `season_packs`) via `TORRENT_FILE_PRIORITY` and settings `file_priority`; skips samples/extras; `SupportsFileSelection=true`

@@ -172,8 +172,9 @@ func (e *anacrolixEngine) addMagnet(uri, savePath string) (managedTorrent, error
 	if err != nil {
 		return nil, fmt.Errorf("parse magnet: %w", err)
 	}
-	if savePath != "" && savePath != e.dataDir {
-		spec.Storage = storage.NewFile(savePath)
+	resolved := resolveSavePath(e.dataDir, savePath)
+	if resolved != "" && resolved != e.dataDir {
+		spec.Storage = storage.NewFile(resolved)
 	}
 	t, _, err := e.client.AddTorrentSpec(spec)
 	if err != nil {
@@ -188,8 +189,9 @@ func (e *anacrolixEngine) addTorrentBytes(data []byte, savePath string) (managed
 		return nil, fmt.Errorf("parse torrent: %w", err)
 	}
 	spec := torrent.TorrentSpecFromMetaInfo(mi)
-	if savePath != "" && savePath != e.dataDir {
-		spec.Storage = storage.NewFile(savePath)
+	resolved := resolveSavePath(e.dataDir, savePath)
+	if resolved != "" && resolved != e.dataDir {
+		spec.Storage = storage.NewFile(resolved)
 	}
 	t, _, err := e.client.AddTorrentSpec(spec)
 	if err != nil {
@@ -239,6 +241,26 @@ func (a *anacrolixTorrent) Files() []fileInfo {
 		out = append(out, fileInfo{Path: path, Size: f.Length})
 	}
 	return out
+}
+
+func (a *anacrolixTorrent) PieceLayout() (pieceLayout, bool) {
+	info := a.t.Info()
+	if info == nil || !info.HasV1() || info.PieceLength <= 0 || len(info.Pieces) < 20 {
+		return pieceLayout{}, false
+	}
+	n := len(info.Pieces) / 20
+	hashes := make([][]byte, n)
+	for i := 0; i < n; i++ {
+		h := make([]byte, 20)
+		copy(h, info.Pieces[i*20:(i+1)*20])
+		hashes[i] = h
+	}
+	return pieceLayout{
+		PieceLength: info.PieceLength,
+		PieceHashes: hashes,
+		Files:       a.Files(),
+		TotalLength: info.TotalLength(),
+	}, true
 }
 
 func (a *anacrolixTorrent) DownloadAll() { a.t.DownloadAll() }
