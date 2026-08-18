@@ -208,7 +208,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Downloader Native Torrent",
-		Version:      "0.2.4",
+		Version:      "0.2.7",
 		Roles:        []string{"downloader"},
 		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
@@ -690,16 +690,21 @@ func (m *Module) publishDownloadEvent(eventType string, th *torrentHandle, errSt
 		return
 	}
 	th.mu.RLock()
+	savePath := resolveSavePath(m.dlDir, th.SavePath)
 	payload := contracts.DownloadEventPayload{
 		ID:       th.ID,
 		Name:     th.Name,
 		InfoHash: th.InfoHash,
-		SavePath: th.SavePath,
+		SavePath: savePath,
 		Label:    th.Label,
 		Error:    errStr,
 	}
 	for _, f := range th.Files {
-		payload.Files = append(payload.Files, contracts.DownloadEventFile{Path: f.Path, Size: f.Size})
+		p := f.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(savePath, p)
+		}
+		payload.Files = append(payload.Files, contracts.DownloadEventFile{Path: p, Size: f.Size})
 	}
 	th.mu.RUnlock()
 	data, err := json.Marshal(payload)

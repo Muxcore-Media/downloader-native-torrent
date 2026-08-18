@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.7 (2026-08-18)
+
+- Download events always emit an absolute `save_path` and file paths (relative `partials/…` joined with the download dir) so scanner ImportPath stays under the watch directory.
+
 ## v0.2.4 (2026-08-18)
 
 - HTTP `.torrent` fetches that redirect to `magnet:` (Prowlarr proxy) are added as magnets instead of failing with `unsupported protocol scheme "magnet"`.
