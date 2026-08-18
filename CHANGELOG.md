@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.4 (2026-08-18)
+
+- HTTP `.torrent` fetches that redirect to `magnet:` (Prowlarr proxy) are added as magnets instead of failing with `unsupported protocol scheme "magnet"`.
+
 ## v0.2.3 (2026-08-18)
 
 - Relative `save_path` is joined with the download dir (automation `partials/{item}/{hash}`).
