@@ -14,5 +14,6 @@
 
 ## Remaining
 
-- [ ] File selection priorities
-- [ ] DHT / PEX tuning knobs via settings
+- [x] File selection priorities
+- [x] DHT / PEX tuning knobs via settings
+- [x] Persist / restore active torrents across process restart

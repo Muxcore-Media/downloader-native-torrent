@@ -45,6 +45,9 @@ type Module struct {
 	grpcSrv          *grpc.Server
 	lis              net.Listener
 	infoTimeout      time.Duration
+
+	persistMu sync.Mutex
+	stopping  bool
 }
 
 // filePriorityApplier is optional on managedTorrent (anacrolix).
@@ -54,6 +57,7 @@ type filePriorityApplier interface {
 
 type torrentHandle struct {
 	ID           string
+	URI          string
 	Name         string
 	InfoHash     string
 	Label        string
@@ -208,7 +212,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Downloader Native Torrent",
-		Version:      "0.2.11",
+		Version:      "0.2.12",
 		Roles:        []string{"downloader"},
 		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
@@ -325,6 +329,7 @@ func (m *Module) rebindTorrent(host string, port int, iface string) {
 }
 
 func (m *Module) Start(ctx context.Context) error {
+	m.restorePersistedTorrents()
 	m.grpcSrv = grpc.NewServer()
 	downloaderv1.RegisterTorrentServiceServer(m.grpcSrv, m)
 	cdlv1.RegisterDownloaderServiceServer(m.grpcSrv, &contractsServer{m: m})
@@ -361,7 +366,9 @@ func (m *Module) dialCore(ctx context.Context) {
 }
 
 func (m *Module) Stop(ctx context.Context) error {
+	m.persistActiveTorrents()
 	m.mu.Lock()
+	m.stopping = true
 	for _, th := range m.torrents {
 		if th.cancel != nil {
 			th.cancel()
@@ -419,26 +426,8 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 		return nil, fmt.Errorf("create save path: %w", err)
 	}
 
-	runCtx, cancel := context.WithCancel(context.Background())
-	th := &torrentHandle{
-		ID:       fmt.Sprintf("torrent_%d", time.Now().UnixNano()),
-		Name:     parseMagnetName(uri),
-		InfoHash: parseInfoHash(uri),
-		Label:    req.GetLabel(),
-		SavePath: savePath,
-		AddedAt:  time.Now(),
-		Status:   "queued",
-		Files:    []fileInfo{},
-		cancel:   cancel,
-		done:     make(chan struct{}),
-		resumeCh: make(chan struct{}, 1),
-	}
-
-	m.mu.Lock()
-	m.torrents[th.ID] = th
-	m.mu.Unlock()
-
-	go m.runTorrent(runCtx, th, uri, req.GetPaused())
+	th := m.spawnTorrent("", uri, savePath, req.GetLabel(), req.GetPaused())
+	m.persistActiveTorrents()
 
 	th.mu.RLock()
 	name, infoHash := th.Name, th.InfoHash
@@ -533,6 +522,7 @@ func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, 
 		th.mu.Lock()
 		th.Status = "paused"
 		th.mu.Unlock()
+		m.persistActiveTorrents()
 		slog.Info("torrent paused after metadata", "id", th.ID)
 		select {
 		case <-ctx.Done():
@@ -633,6 +623,7 @@ func (m *Module) relocatePendingAfterMetadata(ctx context.Context, th *torrentHa
 		th.mu.Unlock()
 		if dest != cur {
 			slog.Info("renamed pending partial to infohash", "from", cur, "to", dest)
+			m.persistActiveTorrents()
 		}
 	}
 	session, err := m.engine.AddURI(ctx, uri, dest)
@@ -679,6 +670,7 @@ func (m *Module) markCompleted(th *torrentHandle, session managedTorrent) {
 	th.CompletedAt = &now
 	th.Files = files
 	th.mu.Unlock()
+	m.persistActiveTorrents()
 	m.publishDownloadEvent(contracts.EventDownloadCompleted, th, "")
 	slog.Info("download completed", "id", th.ID, "name", th.Name)
 }
@@ -716,10 +708,17 @@ func (m *Module) seedRatioReached(th *torrentHandle, session managedTorrent) boo
 }
 
 func (m *Module) failTorrent(th *torrentHandle, err error) {
+	m.mu.RLock()
+	stopping := m.stopping
+	m.mu.RUnlock()
+	if stopping {
+		return
+	}
 	th.mu.Lock()
 	th.Status = "error"
 	th.ErrorStr = err.Error()
 	th.mu.Unlock()
+	m.persistActiveTorrents()
 	m.publishDownloadEvent(contracts.EventDownloadFailed, th, err.Error())
 	slog.Warn("torrent failed", "id", th.ID, "error", err)
 }
@@ -789,6 +788,7 @@ func (m *Module) RemoveTorrent(ctx context.Context, req *downloaderv1.RemoveTorr
 	if req.GetDeleteFiles() {
 		m.deleteTorrentData(savePath, name, files)
 	}
+	m.persistActiveTorrents()
 	return &downloaderv1.RemoveTorrentResponse{}, nil
 }
 

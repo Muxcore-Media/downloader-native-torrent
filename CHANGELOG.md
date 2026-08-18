@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.12 (2026-08-18)
+
+- Persist active torrents to `.muxcore-torrents.json` and restore the same ids/URIs/save paths on start so a downloader restart does not drop in-flight grabs.
+
 ## v0.2.11 (2026-08-18)
 
 - After metadata, `pending_*` save dirs under `partials/{item}/` are renamed to `btih_{infohash}`. Same-hash resume reuses an existing `btih_*` dir. Download events then persist the short identity.
