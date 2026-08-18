@@ -208,7 +208,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Downloader Native Torrent",
-		Version:      "0.2.7",
+		Version:      "0.2.8",
 		Roles:        []string{"downloader"},
 		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
