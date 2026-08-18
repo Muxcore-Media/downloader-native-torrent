@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.10 (2026-08-18)
+
+- Piece-completion DB is opened once per engine and reused across VPN rebind, with retries on lock timeout. A clean stop/start no longer logs `couldn't open piece completion db … timeout` or fall back to in-memory completion.
+
 ## v0.2.9 (2026-08-18)
 
 - Download events join torrent file paths onto `save_path` without duplicating a relative prefix (`partials/item/…` + `partials/item/file.mkv`).

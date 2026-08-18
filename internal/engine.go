@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -42,6 +43,7 @@ type managedTorrent interface {
 
 type anacrolixEngine struct {
 	client     *torrent.Client
+	storage    storage.ClientImplCloser
 	http       *http.Client
 	dataDir    string
 	listenPort int
@@ -72,8 +74,17 @@ func newAnacrolixEngineOpts(dataDir string, listenPort int, hc *http.Client, opt
 		http: hc, dataDir: dataDir, listenPort: listenPort, listenHost: opts.ListenHost,
 		enableDHT: opts.EnableDHT, enablePEX: opts.EnablePEX,
 	}
+	pc, err := openPieceCompletionRetry(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("piece completion db: %w", err)
+	}
+	e.storage = storage.NewFileOpts(storage.NewFileClientOpts{
+		ClientBaseDir:   dataDir,
+		PieceCompletion: pc,
+	})
 	cl, err := e.newClient(opts.ListenHost, listenPort)
 	if err != nil {
+		_ = e.storage.Close()
 		return nil, fmt.Errorf("torrent client: %w", err)
 	}
 	e.client = cl
@@ -110,8 +121,28 @@ func (e *anacrolixEngine) newClient(host string, port int) (*torrent.Client, err
 	cfg.Seed = true
 	cfg.NoDHT = !e.enableDHT
 	cfg.DisablePEX = !e.enablePEX
+	cfg.DefaultStorage = e.storage
 	applyListenConfig(cfg, host, port)
 	return torrent.NewClient(cfg)
+}
+
+func openPieceCompletionRetry(dir string) (storage.PieceCompletion, error) {
+	const attempts = 10
+	wait := 200 * time.Millisecond
+	var last error
+	for i := 0; i < attempts; i++ {
+		pc, err := storage.NewDefaultPieceCompletionForDir(dir)
+		if err == nil {
+			if i > 0 {
+				slog.Info("opened piece completion db after retry", "dir", dir, "attempt", i+1)
+			}
+			return pc, nil
+		}
+		last = err
+		slog.Warn("piece completion db busy; retrying", "dir", dir, "attempt", i+1, "error", err)
+		time.Sleep(wait)
+	}
+	return nil, last
 }
 
 // rebind replaces the torrent client to listen on host:port. The previous client is
@@ -144,6 +175,11 @@ func (e *anacrolixEngine) rebind(listenHost string, listenPort int) error {
 func (e *anacrolixEngine) Close() error {
 	if e.client != nil {
 		e.client.Close()
+		e.client = nil
+	}
+	if e.storage != nil {
+		_ = e.storage.Close()
+		e.storage = nil
 	}
 	return nil
 }
