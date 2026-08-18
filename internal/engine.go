@@ -157,9 +157,12 @@ func (e *anacrolixEngine) AddURI(ctx context.Context, uri, savePath string) (man
 	case "magnet":
 		return e.addMagnet(uri, savePath)
 	case "http":
-		data, err := fetchTorrentFile(ctx, e.http, uri)
+		data, magnet, err := fetchTorrentFile(ctx, e.http, uri)
 		if err != nil {
 			return nil, err
+		}
+		if magnet != "" {
+			return e.addMagnet(magnet, savePath)
 		}
 		return e.addTorrentBytes(data, savePath)
 	default:
@@ -333,28 +336,57 @@ func classifyURI(uri string) (string, error) {
 	}
 }
 
-func fetchTorrentFile(ctx context.Context, hc *http.Client, uri string) ([]byte, error) {
+func isMagnetURI(s string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "magnet:")
+}
+
+func httpClientStopOnMagnet(hc *http.Client) *http.Client {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
+	c := *hc
+	prev := hc.CheckRedirect
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL != nil && strings.EqualFold(req.URL.Scheme, "magnet") {
+			return http.ErrUseLastResponse
+		}
+		if prev != nil {
+			return prev(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &c
+}
+
+func fetchTorrentFile(ctx context.Context, hc *http.Client, uri string) ([]byte, string, error) {
+	hc = httpClientStopOnMagnet(hc)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch torrent: %w", err)
+		return nil, "", fmt.Errorf("fetch torrent: %w", err)
 	}
 	defer resp.Body.Close()
+	if loc := resp.Header.Get("Location"); isMagnetURI(loc) {
+		return nil, strings.TrimSpace(loc), nil
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch torrent: status %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("fetch torrent: status %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxTorrentFileBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(data) > maxTorrentFileBytes {
-		return nil, fmt.Errorf("torrent file exceeds %d bytes", maxTorrentFileBytes)
+		return nil, "", fmt.Errorf("torrent file exceeds %d bytes", maxTorrentFileBytes)
 	}
-	return data, nil
+	if isMagnetURI(string(data)) {
+		return nil, strings.TrimSpace(string(data)), nil
+	}
+	return data, "", nil
 }

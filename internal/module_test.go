@@ -357,12 +357,34 @@ func TestFetchTorrentFileHTTPtest(t *testing.T) {
 		w.Write([]byte("not-a-real-torrent-but-fetched"))
 	}))
 	t.Cleanup(srv.Close)
-	data, err := fetchTorrentFile(context.Background(), srv.Client(), srv.URL+"/x.torrent")
+	data, magnet, err := fetchTorrentFile(context.Background(), srv.Client(), srv.URL+"/x.torrent")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if magnet != "" {
+		t.Fatalf("unexpected magnet %q", magnet)
+	}
 	if string(data) != "not-a-real-torrent-but-fetched" {
 		t.Errorf("got %q", data)
+	}
+}
+
+func TestFetchTorrentFileMagnetRedirect(t *testing.T) {
+	want := "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&dn=Pooh"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", want)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	data, magnet, err := fetchTorrentFile(context.Background(), srv.Client(), srv.URL+"/download")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("data %q", data)
+	}
+	if magnet != want {
+		t.Fatalf("magnet %q", magnet)
 	}
 }
 
@@ -372,7 +394,7 @@ func TestFetchTorrentFileTooLarge(t *testing.T) {
 		w.Write([]byte(big))
 	}))
 	t.Cleanup(srv.Close)
-	_, err := fetchTorrentFile(context.Background(), srv.Client(), srv.URL)
+	_, _, err := fetchTorrentFile(context.Background(), srv.Client(), srv.URL)
 	if err == nil {
 		t.Fatal("expected size error")
 	}
