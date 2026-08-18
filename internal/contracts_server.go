@@ -101,14 +101,16 @@ func (m *Module) pauseTorrent(id string) (bool, error) {
 		return false, fmt.Errorf("torrent %q not found", id)
 	}
 	th.mu.Lock()
-	defer th.mu.Unlock()
 	if th.Status == "completed" || th.Status == "failed" || th.Status == "removed" {
+		th.mu.Unlock()
 		return false, fmt.Errorf("cannot pause torrent in status %s", th.Status)
 	}
 	if th.session != nil {
 		th.session.PauseDownload()
 	}
 	th.Status = "paused"
+	th.mu.Unlock()
+	m.persistActiveTorrents()
 	return true, nil
 }
 
@@ -136,6 +138,7 @@ func (m *Module) resumeTorrent(id string) (bool, error) {
 	if session != nil {
 		m.beginDownload(session)
 	}
+	m.persistActiveTorrents()
 	return true, nil
 }
 

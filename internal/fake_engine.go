@@ -8,11 +8,12 @@ import (
 
 // fakeEngine is an injectable torrentEngine for unit tests (no network / anacrolix).
 type fakeEngine struct {
-	mu      sync.Mutex
-	failAdd error
-	failInfo error
+	mu              sync.Mutex
+	failAdd         error
+	failInfo        error
 	instantComplete bool
-	torrents []*fakeManaged
+	stuck           bool
+	torrents        []*fakeManaged
 }
 
 func (e *fakeEngine) Close() error { return nil }
@@ -35,6 +36,7 @@ func (e *fakeEngine) AddURI(ctx context.Context, uri, savePath string) (managedT
 		total:    1024 * 1024,
 		failInfo: e.failInfo,
 		instant:  e.instantComplete,
+		stuck:    e.stuck,
 	}
 	e.mu.Lock()
 	e.torrents = append(e.torrents, ft)
@@ -51,6 +53,7 @@ type fakeManaged struct {
 	uploaded int64
 	failInfo error
 	instant  bool
+	stuck    bool
 	started  bool
 	dropped  bool
 }
@@ -87,7 +90,11 @@ func (f *fakeManaged) DownloadAll() {
 	}
 	f.started = true
 	instant := f.instant
+	stuck := f.stuck
 	f.mu.Unlock()
+	if stuck {
+		return
+	}
 	go func() {
 		if instant {
 			f.mu.Lock()
