@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.1 (2026-08-20)
+
+- Settings: `recheck_torrent` (VerifyData) and `torrent_file_priority` (`<id>:<all|episodes|season_packs>`).
+- Mesh session list already persisted to `torrent/sessions.json` (documented).
+
+## v0.3.0 (2026-08-20)
+
+- **Mesh storage (default):** piece I/O streams through core `StorageService` (`DOWNLOAD_STORAGE=mesh`). Keys `torrent/{infohash}/p/{n}` + completion bitfield; seeding reads the same objects. No local `DOWNLOAD_DIR` required. Set `DOWNLOAD_STORAGE=local` for the legacy file client.
+- Events use `save_path=storage://torrent/{infohash}`; `RemoveTorrent(delete_files)` deletes the storage prefix.
+- Call-policy: grant `downloader-native-torrent` storage read/write (see call-policy-default v0.3.4).
+
 ## v0.2.12 (2026-08-18)
 
 - Persist active torrents to `.muxcore-torrents.json` and restore the same ids/URIs/save paths on start so a downloader restart does not drop in-flight grabs.

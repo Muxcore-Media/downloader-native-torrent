@@ -5,10 +5,11 @@ Native BitTorrent engine for MuxCore using [anacrolix/torrent](https://github.co
 ## Key Features
 
 - Real torrent client (magnets and HTTP(S) `.torrent` URLs)
+- **Mesh storage (default):** pieces stream to/from core `StorageService` over gRPC — ready for local, S3, Ceph, or overlay backends. Seeding reads the same storage keys. Set `DOWNLOAD_STORAGE=local` only for legacy disk layouts.
 - Per-torrent progress via `GetTorrent` / `ListTorrents`
 - `PauseTorrent` / `ResumeTorrent` (local `TorrentService` and shared `contracts-downloader`)
 - Publishes `download.started`, `download.completed`, `download.failed` on the core event bus when mesh is connected
-- Seed until ratio ≥ 1.0 or 60 minutes (configurable), then leave the swarm and keep files
+- Seed until ratio ≥ 1.0 or 60 minutes (configurable), then leave the swarm and keep data in storage (or local dir)
 - WireGuard VPN + kill switch and Proton NAT-PMP; after handshake the client maps UDP+TCP, then rebinds listen host/port to the WireGuard IPv4 address and the assigned port
 - Mesh `settings` capability (`download_path`, `listen_port`, `wg_conf`, `wg_kill_switch`)
 
@@ -19,7 +20,8 @@ Proton WireGuard configs with `# NAT-PMP (Port Forwarding) = on` trigger a map t
 | Env Var | Default | Description |
 |---------|---------|-------------|
 | `DOWNLOADER_GRPC_ADDR` | `:9461` | gRPC listen address (registered as `HTTPAddr`) |
-| `DOWNLOAD_DIR` | `/var/lib/downloader-native-torrent/downloads` | Client data dir / default save path |
+| `DOWNLOAD_STORAGE` | `auto` | `mesh` = gRPC StorageService; `local` = `DOWNLOAD_DIR` files; `auto` = mesh when `MUXCORE_GRPC_ADDR` is set |
+| `DOWNLOAD_DIR` | `/var/lib/downloader-native-torrent/downloads` | Used only when `DOWNLOAD_STORAGE=local` |
 | `TORRENT_LISTEN_PORT` | `6881` | Fallback BitTorrent listen port when NAT-PMP is off or mapping fails (also used if `NAT_PMP_PORT` is set and this is unset) |
 | `TORRENT_FILE_PRIORITY` | `all` | File selection: `all`, `episodes` (prefer SxxEyy; skip samples/packs when episodes exist), `season_packs` |
 | `TORRENT_ENABLE_DHT` | `true` | Enable BitTorrent DHT (restart module after change via settings) |
@@ -29,7 +31,7 @@ Proton WireGuard configs with `# NAT-PMP (Port Forwarding) = on` trigger a map t
 | `WG_CONF` | `""` | WireGuard config file path |
 | `WG_KILL_SWITCH` | `false` | Enable VPN kill switch |
 | `NAT_PMP_PORT` | `0` | Not sent to Proton. Optional fallback listen port if `TORRENT_LISTEN_PORT` is unset. Proton assigns a random 60s port via NAT-PMP (`10.2.0.1:5351`); the downloader listens on that port and renews every 45s |
-| `MUXCORE_GRPC_ADDR` | — | Core mesh (optional; required for download.* events) |
+| `MUXCORE_GRPC_ADDR` | — | Core mesh (required for mesh storage + download.* events) |
 | `MUXCORE_INSECURE_DISABLE_TLS` | `false` | Disable TLS for local core |
 
 ## Capabilities

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Muxcore-Media/downloader-native-torrent/internal/meshstore"
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
@@ -50,12 +51,14 @@ type anacrolixEngine struct {
 	listenHost string
 	enableDHT  bool
 	enablePEX  bool
+	meshMode   bool // when true, never attach per-torrent NewFile storage
 }
 
 type anacrolixEngineOpts struct {
-	ListenHost string
-	EnableDHT  bool
-	EnablePEX  bool
+	ListenHost  string
+	EnableDHT   bool
+	EnablePEX   bool
+	MeshStorage storage.ClientImplCloser // when set, no local DOWNLOAD_DIR piece store
 }
 
 func newAnacrolixEngine(dataDir string, listenPort int, listenHost string, hc *http.Client) (*anacrolixEngine, error) {
@@ -74,14 +77,19 @@ func newAnacrolixEngineOpts(dataDir string, listenPort int, hc *http.Client, opt
 		http: hc, dataDir: dataDir, listenPort: listenPort, listenHost: opts.ListenHost,
 		enableDHT: opts.EnableDHT, enablePEX: opts.EnablePEX,
 	}
-	pc, err := openPieceCompletionRetry(dataDir)
-	if err != nil {
-		return nil, fmt.Errorf("piece completion db: %w", err)
+	if opts.MeshStorage != nil {
+		e.storage = opts.MeshStorage
+		e.meshMode = true
+	} else {
+		pc, err := openPieceCompletionRetry(dataDir)
+		if err != nil {
+			return nil, fmt.Errorf("piece completion db: %w", err)
+		}
+		e.storage = storage.NewFileOpts(storage.NewFileClientOpts{
+			ClientBaseDir:   dataDir,
+			PieceCompletion: pc,
+		})
 	}
-	e.storage = storage.NewFileOpts(storage.NewFileClientOpts{
-		ClientBaseDir:   dataDir,
-		PieceCompletion: pc,
-	})
 	cl, err := e.newClient(opts.ListenHost, listenPort)
 	if err != nil {
 		_ = e.storage.Close()
@@ -117,7 +125,9 @@ func isIPv4Host(host string) bool {
 
 func (e *anacrolixEngine) newClient(host string, port int) (*torrent.Client, error) {
 	cfg := torrent.NewDefaultClientConfig()
-	cfg.DataDir = e.dataDir
+	if e.dataDir != "" {
+		cfg.DataDir = e.dataDir
+	}
 	cfg.Seed = true
 	cfg.NoDHT = !e.enableDHT
 	cfg.DisablePEX = !e.enablePEX
@@ -191,14 +201,15 @@ func (e *anacrolixEngine) AddURI(ctx context.Context, uri, savePath string) (man
 	}
 	switch kind {
 	case "magnet":
-		return e.addMagnet(uri, savePath)
+		return e.addMagnetPreferMetainfo(ctx, uri, savePath)
 	case "http":
 		data, magnet, err := fetchTorrentFile(ctx, e.http, uri)
 		if err != nil {
 			return nil, err
 		}
 		if magnet != "" {
-			return e.addMagnet(magnet, savePath)
+			// Prowlarr often 301s to magnet:; DHT metadata is unreliable behind VPN.
+			return e.addMagnetPreferMetainfo(ctx, magnet, savePath)
 		}
 		return e.addTorrentBytes(data, savePath)
 	default:
@@ -206,14 +217,30 @@ func (e *anacrolixEngine) AddURI(ctx context.Context, uri, savePath string) (man
 	}
 }
 
+// addMagnetPreferMetainfo loads a .torrent from a public cache when possible so
+// GotInfo is immediate instead of waiting on DHT/PEX for magnet metadata.
+func (e *anacrolixEngine) addMagnetPreferMetainfo(ctx context.Context, magnet, savePath string) (managedTorrent, error) {
+	if hash := strings.ToLower(parseInfoHash(magnet)); hash != "" {
+		if meta, err := fetchTorrentMetainfo(ctx, hash); err == nil {
+			slog.Info("resolved magnet via torrent cache", "infohash", hash, "bytes", len(meta))
+			return e.addTorrentBytes(meta, savePath)
+		} else {
+			slog.Debug("torrent cache miss; falling back to magnet", "infohash", hash, "error", err)
+		}
+	}
+	return e.addMagnet(magnet, savePath)
+}
+
 func (e *anacrolixEngine) addMagnet(uri, savePath string) (managedTorrent, error) {
 	spec, err := torrent.TorrentSpecFromMagnetUri(uri)
 	if err != nil {
 		return nil, fmt.Errorf("parse magnet: %w", err)
 	}
-	resolved := resolveSavePath(e.dataDir, savePath)
-	if resolved != "" && resolved != e.dataDir {
-		spec.Storage = storage.NewFile(resolved)
+	if !e.meshMode {
+		resolved := resolveSavePath(e.dataDir, savePath)
+		if resolved != "" && resolved != e.dataDir {
+			spec.Storage = storage.NewFile(resolved)
+		}
 	}
 	t, _, err := e.client.AddTorrentSpec(spec)
 	if err != nil {
@@ -227,10 +254,20 @@ func (e *anacrolixEngine) addTorrentBytes(data []byte, savePath string) (managed
 	if err != nil {
 		return nil, fmt.Errorf("parse torrent: %w", err)
 	}
+	if e.meshMode {
+		if ms, ok := e.storage.(*meshstore.Client); ok {
+			ih := mi.HashInfoBytes()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = ms.PutMeta(ctx, ih, data)
+			cancel()
+		}
+	}
 	spec := torrent.TorrentSpecFromMetaInfo(mi)
-	resolved := resolveSavePath(e.dataDir, savePath)
-	if resolved != "" && resolved != e.dataDir {
-		spec.Storage = storage.NewFile(resolved)
+	if !e.meshMode {
+		resolved := resolveSavePath(e.dataDir, savePath)
+		if resolved != "" && resolved != e.dataDir {
+			spec.Storage = storage.NewFile(resolved)
+		}
 	}
 	t, _, err := e.client.AddTorrentSpec(spec)
 	if err != nil {

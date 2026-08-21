@@ -27,8 +27,28 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 			Type:        contracts.SettingTypeString,
 			Default:     "/var/lib/downloader-native-torrent/downloads",
 			Value:       dlDir,
-			Description: "Directory where torrents are saved",
-			Required:    true,
+			Description: "Local save dir when DOWNLOAD_STORAGE=local (ignored for mesh piece store)",
+			Required:    false,
+			Group:       "Downloads",
+		},
+		{
+			Key:         "recheck_torrent",
+			Label:       "Recheck torrent id",
+			Type:        contracts.SettingTypeString,
+			Default:     "",
+			Value:       "",
+			Description: "Write a torrent id to re-hash pieces against storage/disk (one-shot)",
+			Required:    false,
+			Group:       "Downloads",
+		},
+		{
+			Key:         "torrent_file_priority",
+			Label:       "Per-torrent file priority",
+			Type:        contracts.SettingTypeString,
+			Default:     "",
+			Value:       "",
+			Description: "Format: <torrent_id>:<all|episodes|season_packs> — apply file selection to one torrent",
+			Required:    false,
 			Group:       "Downloads",
 		},
 		{
@@ -105,6 +125,10 @@ func (m *Module) updateSetting(key, value string) error {
 		m.dlDir = value
 		m.mu.Unlock()
 		return nil
+	case "recheck_torrent":
+		return m.recheckTorrent(strings.TrimSpace(value))
+	case "torrent_file_priority":
+		return m.applyTorrentFilePriority(strings.TrimSpace(value))
 	case "listen_port", "TORRENT_LISTEN_PORT":
 		p, err := strconv.Atoi(strings.TrimSpace(value))
 		if err != nil || p <= 0 {
@@ -142,6 +166,48 @@ func (m *Module) updateSetting(key, value string) error {
 	default:
 		return fmt.Errorf("unknown setting %q", key)
 	}
+}
+
+func (m *Module) recheckTorrent(id string) error {
+	if id == "" {
+		return fmt.Errorf("torrent id required")
+	}
+	m.mu.RLock()
+	th := m.torrents[id]
+	m.mu.RUnlock()
+	if th == nil {
+		return fmt.Errorf("torrent not found: %s", id)
+	}
+	th.mu.RLock()
+	session := th.session
+	th.mu.RUnlock()
+	at, ok := session.(*anacrolixTorrent)
+	if !ok || at == nil || at.t == nil {
+		return fmt.Errorf("recheck requires live anacrolix session")
+	}
+	return at.t.VerifyData()
+}
+
+func (m *Module) applyTorrentFilePriority(spec string) error {
+	parts := strings.SplitN(spec, ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("want <torrent_id>:<all|episodes|season_packs>")
+	}
+	id, mode := parts[0], normalizeFilePriorityMode(parts[1])
+	m.mu.RLock()
+	th := m.torrents[id]
+	m.mu.RUnlock()
+	if th == nil {
+		return fmt.Errorf("torrent not found: %s", id)
+	}
+	th.mu.RLock()
+	session := th.session
+	th.mu.RUnlock()
+	if applier, ok := session.(filePriorityApplier); ok {
+		applier.ApplyFilePriorities(mode)
+		return nil
+	}
+	return fmt.Errorf("torrent does not support file priority")
 }
 
 func (m *Module) Settings() []contracts.SettingDef {
