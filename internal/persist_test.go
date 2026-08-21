@@ -40,19 +40,26 @@ func TestTorrentSessionPersistsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(m1.sessionPath())
-	if err != nil {
-		t.Fatalf("session file: %v", err)
-	}
-	var sess torrentSession
-	if err := json.Unmarshal(raw, &sess); err != nil {
-		t.Fatal(err)
-	}
-	if len(sess.Torrents) != 1 || sess.Torrents[0].ID != resp.Id {
-		t.Fatalf("session %+v", sess)
-	}
-	if sess.Torrents[0].URI != uri {
-		t.Fatalf("uri %q", sess.Torrents[0].URI)
+	wantPath := filepath.Join(dir, "partials/item/btih_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		raw, err := os.ReadFile(m1.sessionPath())
+		if err != nil {
+			t.Fatalf("session file: %v", err)
+		}
+		var sess torrentSession
+		if err := json.Unmarshal(raw, &sess); err != nil {
+			t.Fatal(err)
+		}
+		if len(sess.Torrents) == 1 && sess.Torrents[0].ID == resp.Id && sess.Torrents[0].URI == uri {
+			if sess.Torrents[0].SavePath == wantPath || time.Now().After(deadline) {
+				if sess.Torrents[0].SavePath != wantPath {
+					t.Fatalf("save path %q want %q", sess.Torrents[0].SavePath, wantPath)
+				}
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	if err := m1.Stop(context.Background()); err != nil {
@@ -68,7 +75,6 @@ func TestTorrentSessionPersistsAcrossRestart(t *testing.T) {
 	if got.GetTorrent().GetId() != resp.Id {
 		t.Fatalf("id %q want %q", got.GetTorrent().GetId(), resp.Id)
 	}
-	wantPath := filepath.Join(dir, "partials/item/btih_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	if got.GetTorrent().GetSavePath() != wantPath {
 		t.Fatalf("save path %q want %q", got.GetTorrent().GetSavePath(), wantPath)
 	}

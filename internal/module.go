@@ -1,11 +1,13 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +20,7 @@ import (
 	cdlv1 "github.com/Muxcore-Media/contracts-downloader/muxcore/downloader/v1"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/Muxcore-Media/core/sdk/go/client"
+	"github.com/Muxcore-Media/downloader-native-torrent/internal/meshstore"
 	downloaderv1 "github.com/Muxcore-Media/downloader-native-torrent/proto/downloaderv1"
 )
 
@@ -30,6 +33,7 @@ type Module struct {
 	natPMP *natPMPClient
 	engine torrentEngine
 	mc     *client.Client
+	mesh   *meshstore.Client // non-nil when DOWNLOAD_STORAGE=mesh
 
 	id               string
 	grpcAddr         string
@@ -212,7 +216,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Downloader Native Torrent",
-		Version:      "0.2.12",
+		Version:      "0.3.8",
 		Roles:        []string{"downloader"},
 		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
@@ -230,8 +234,11 @@ func (m *Module) Info() contracts.ModuleInfo {
 }
 
 func (m *Module) Init(ctx context.Context) error {
-	if err := os.MkdirAll(m.dlDir, 0755); err != nil {
-		return fmt.Errorf("create download dir: %w", err)
+	// Mesh storage needs the core dial before the engine; local mode needs the dir now.
+	if storageMode() == "local" {
+		if err := os.MkdirAll(m.dlDir, 0755); err != nil {
+			return fmt.Errorf("create download dir: %w", err)
+		}
 	}
 	if m.engine == nil {
 		switch os.Getenv("DOWNLOADER_ENGINE") {
@@ -239,14 +246,17 @@ func (m *Module) Init(ctx context.Context) error {
 			slog.Info("using fixture torrent engine (no network)")
 			m.engine = &fixtureEngine{}
 		default:
-			eng, err := newAnacrolixEngineOpts(m.dlDir, m.listenPort, nil, anacrolixEngineOpts{
-				EnableDHT: m.enableDHT,
-				EnablePEX: m.enablePEX,
-			})
-			if err != nil {
-				return err
+			if storageMode() == "local" {
+				eng, err := newAnacrolixEngineOpts(m.dlDir, m.listenPort, nil, anacrolixEngineOpts{
+					EnableDHT: m.enableDHT,
+					EnablePEX: m.enablePEX,
+				})
+				if err != nil {
+					return err
+				}
+				m.engine = eng
 			}
-			m.engine = eng
+			// mesh mode: engine created in dialCore after StorageClient is available
 		}
 	}
 	lis, err := net.Listen("tcp", m.grpcAddr)
@@ -255,7 +265,7 @@ func (m *Module) Init(ctx context.Context) error {
 	}
 	m.lis = lis
 	slog.Info("downloader-native-torrent initialized",
-		"addr", m.grpcAddr, "dir", m.dlDir, "listen_port", m.listenPort,
+		"addr", m.grpcAddr, "storage", storageMode(), "dir", m.dlDir, "listen_port", m.listenPort,
 		"file_priority", m.filePriorityMode, "dht", m.enableDHT, "pex", m.enablePEX)
 
 	go m.autoStartVPN()
@@ -329,7 +339,6 @@ func (m *Module) rebindTorrent(host string, port int, iface string) {
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.restorePersistedTorrents()
 	m.grpcSrv = grpc.NewServer()
 	downloaderv1.RegisterTorrentServiceServer(m.grpcSrv, m)
 	cdlv1.RegisterDownloaderServiceServer(m.grpcSrv, &contractsServer{m: m})
@@ -340,7 +349,15 @@ func (m *Module) Start(ctx context.Context) error {
 			slog.Error("downloader-native-torrent gRPC serve error", "error", err)
 		}
 	}()
-	go m.dialCore(context.Background())
+	go func() {
+		m.dialCore(context.Background())
+		if err := m.ensureEngine(context.Background()); err != nil {
+			slog.Error("torrent engine not ready", "error", err)
+			return
+		}
+		m.restorePersistedTorrents()
+		go m.repairIncompleteAssemblies()
+	}()
 	return nil
 }
 
@@ -392,6 +409,18 @@ func (m *Module) Stop(ctx context.Context) error {
 }
 
 func (m *Module) Health(ctx context.Context) error {
+	if storageMode() == "mesh" {
+		m.mu.RLock()
+		mc := m.mc
+		m.mu.RUnlock()
+		if mc == nil {
+			return fmt.Errorf("mesh storage: not connected to core")
+		}
+		if _, err := mc.Storage.Capabilities(ctx); err != nil {
+			return fmt.Errorf("mesh storage: %w", err)
+		}
+		return nil
+	}
 	_, err := os.Stat(m.dlDir)
 	if err != nil {
 		return fmt.Errorf("download dir %s: %w", m.dlDir, err)
@@ -409,8 +438,22 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 	if _, err := classifyURI(uri); err != nil {
 		return nil, err
 	}
-	savePath := resolveSavePath(m.dlDir, req.GetSavePath())
-	if hash := strings.ToLower(parseInfoHash(uri)); hash != "" {
+	if err := m.ensureEngine(ctx); err != nil {
+		return nil, err
+	}
+	hash := strings.ToLower(parseInfoHash(uri))
+	var savePath string
+	if storageMode() == "mesh" {
+		if hash == "" {
+			// magnet without hash in URI is rare; placeholder until metadata
+			savePath = "storage://torrent/pending"
+		} else {
+			savePath = storageSavePath(hash)
+		}
+	} else {
+		savePath = resolveSavePath(m.dlDir, req.GetSavePath())
+	}
+	if hash != "" {
 		if existing := m.findHandleByInfoHash(hash); existing != nil {
 			if _, err := m.engine.AddURI(ctx, uri, existing.SavePath); err != nil {
 				slog.Debug("merge trackers for existing torrent", "hash", hash, "error", err)
@@ -422,8 +465,10 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 			return &downloaderv1.AddTorrentResponse{Id: id, Name: name, InfoHash: infoHash}, nil
 		}
 	}
-	if err := os.MkdirAll(savePath, 0755); err != nil {
-		return nil, fmt.Errorf("create save path: %w", err)
+	if storageMode() != "mesh" {
+		if err := os.MkdirAll(savePath, 0755); err != nil {
+			return nil, fmt.Errorf("create save path: %w", err)
+		}
 	}
 
 	th := m.spawnTorrent("", uri, savePath, req.GetLabel(), req.GetPaused())
@@ -432,7 +477,12 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 	th.mu.RLock()
 	name, infoHash := th.Name, th.InfoHash
 	th.mu.RUnlock()
-	slog.Info("torrent added", "id", th.ID, "name", name)
+	if storageMode() == "mesh" && infoHash != "" && !strings.Contains(th.SavePath, infoHash) {
+		th.mu.Lock()
+		th.SavePath = storageSavePath(infoHash)
+		th.mu.Unlock()
+	}
+	slog.Info("torrent added", "id", th.ID, "name", name, "save_path", th.SavePath)
 	return &downloaderv1.AddTorrentResponse{
 		Id: th.ID, Name: name, InfoHash: infoHash,
 	}, nil
@@ -468,26 +518,101 @@ func pieceLayoutOf(session managedTorrent) (pieceLayout, bool) {
 	return p.PieceLayout()
 }
 
+// resolveIndexerURI turns Prowlarr/indexer HTTP download links into magnets
+// (and mesh save paths) before AddURI so sessions never persist ephemeral URLs
+// stuck at storage://torrent/pending.
+func (m *Module) resolveIndexerURI(ctx context.Context, th *torrentHandle, uri string) string {
+	kind, err := classifyURI(uri)
+	if err != nil || kind != "http" {
+		return uri
+	}
+	var hc *http.Client
+	if eng, ok := m.engine.(*anacrolixEngine); ok && eng.http != nil {
+		hc = eng.http
+	}
+	_, magnet, ferr := fetchTorrentFile(ctx, hc, uri)
+	if ferr != nil || magnet == "" {
+		if ferr != nil {
+			slog.Debug("indexer http resolve deferred to AddURI", "id", th.ID, "error", ferr)
+		}
+		return uri
+	}
+	hash := strings.ToLower(parseInfoHash(magnet))
+	th.mu.Lock()
+	th.URI = magnet
+	if hash != "" {
+		th.InfoHash = hash
+		if storageMode() == "mesh" {
+			cur := th.SavePath
+			if dest, ok := meshPendingDest(cur, hash); ok {
+				th.SavePath = dest
+				slog.Info("mesh pending save path set to infohash", "from", cur, "to", dest)
+			}
+		}
+	}
+	th.mu.Unlock()
+	m.persistActiveTorrents()
+	slog.Info("resolved indexer http to magnet", "id", th.ID, "infohash", hash)
+	return magnet
+}
+
 func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, paused bool) {
 	defer close(th.done)
 
+	uri = m.resolveIndexerURI(ctx, th, uri)
+
 	session, err := m.engine.AddURI(ctx, uri, th.SavePath)
 	if err != nil {
-		m.failTorrent(th, err)
-		return
+		if alt := magnetFallbackURI(uri, th.SavePath); alt != "" && alt != uri {
+			slog.Warn("add uri failed; retrying with magnet from save path", "id", th.ID, "error", err)
+			uri = alt
+			th.mu.Lock()
+			th.URI = alt
+			th.mu.Unlock()
+			session, err = m.engine.AddURI(ctx, uri, th.SavePath)
+		}
+		if err != nil {
+			m.failTorrent(th, err)
+			return
+		}
 	}
 	th.mu.Lock()
 	th.session = session
 	th.mu.Unlock()
 
+	// Relocate mesh pending as soon as the infohash is known (magnet xt= or
+	// HTTP→magnet redirect), before WaitInfo — otherwise pieces land under pending.
+	if hash := strings.ToLower(parseInfoHash(uri)); hash != "" {
+		th.mu.Lock()
+		if th.InfoHash == "" {
+			th.InfoHash = hash
+		}
+		th.mu.Unlock()
+		if session, err = m.relocatePendingAfterMetadata(ctx, th, session, uri); err != nil {
+			m.failTorrent(th, err)
+			return
+		}
+	}
+
 	infoCtx, infoCancel := context.WithTimeout(ctx, m.infoTimeout)
 	defer infoCancel()
 	if err := session.WaitInfo(infoCtx); err != nil {
-		session.Drop()
-		m.failTorrent(th, fmt.Errorf("wait metadata: %w", err))
-		return
+		if rescued, rerr := m.rescueWaitInfoWithCache(ctx, th, session, uri); rerr == nil {
+			session = rescued
+		} else {
+			session.Drop()
+			m.failTorrent(th, fmt.Errorf("wait metadata: %w", err))
+			return
+		}
 	}
 	m.syncHandleFromTorrent(th, session)
+	if m.canonicalizePersistedURI(th) {
+		th.mu.RLock()
+		uri = th.URI
+		th.mu.RUnlock()
+		m.persistActiveTorrents()
+	}
+	m.persistMeshMetainfo(session)
 	session, err = m.relocatePendingAfterMetadata(ctx, th, session, uri)
 	if err != nil {
 		m.failTorrent(th, err)
@@ -605,10 +730,61 @@ func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, 
 	}
 }
 
+// rescueWaitInfoWithCache re-adds via a cached .torrent when DHT metadata stalls.
+func (m *Module) rescueWaitInfoWithCache(ctx context.Context, th *torrentHandle, session managedTorrent, uri string) (managedTorrent, error) {
+	th.mu.RLock()
+	hash, save, name := th.InfoHash, th.SavePath, th.Name
+	th.mu.RUnlock()
+	if hash == "" {
+		hash = parseInfoHash(uri)
+	}
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if len(hash) != 40 {
+		return nil, fmt.Errorf("no infohash for metadata rescue")
+	}
+	if _, err := fetchTorrentMetainfo(ctx, hash); err != nil {
+		return nil, err
+	}
+	session.Drop()
+	magnet := magnetFromInfoHash(hash, name)
+	if magnet == "" {
+		magnet = uri
+	}
+	th.mu.Lock()
+	th.URI = magnet
+	th.InfoHash = hash
+	th.mu.Unlock()
+	newSession, err := m.engine.AddURI(ctx, magnet, save)
+	if err != nil {
+		return nil, err
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := newSession.WaitInfo(waitCtx); err != nil {
+		newSession.Drop()
+		return nil, err
+	}
+	th.mu.Lock()
+	th.session = newSession
+	th.mu.Unlock()
+	slog.Info("rescued torrent metadata from cache", "id", th.ID, "infohash", hash)
+	return newSession, nil
+}
+
 func (m *Module) relocatePendingAfterMetadata(ctx context.Context, th *torrentHandle, session managedTorrent, uri string) (managedTorrent, error) {
 	th.mu.RLock()
 	cur, hash := th.SavePath, th.InfoHash
 	th.mu.RUnlock()
+	if storageMode() == "mesh" {
+		if dest, ok := meshPendingDest(cur, hash); ok {
+			th.mu.Lock()
+			th.SavePath = dest
+			th.mu.Unlock()
+			slog.Info("mesh pending save path set to infohash", "from", cur, "to", dest)
+			m.persistActiveTorrents()
+		}
+		return session, nil
+	}
 	dest, ok := hashPartialDest(cur, hash)
 	if !ok {
 		return session, nil
@@ -643,6 +819,26 @@ func (m *Module) relocatePendingAfterMetadata(ctx context.Context, th *torrentHa
 	return session, nil
 }
 
+func (m *Module) persistMeshMetainfo(session managedTorrent) {
+	if storageMode() != "mesh" || m.mesh == nil {
+		return
+	}
+	at, ok := session.(*anacrolixTorrent)
+	if !ok || at.t == nil || at.t.Info() == nil {
+		return
+	}
+	var buf bytes.Buffer
+	mi := at.t.Metainfo()
+	if err := mi.Write(&buf); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := m.mesh.PutMeta(ctx, at.t.InfoHash(), buf.Bytes()); err != nil {
+		slog.Debug("persist mesh metainfo", "error", err)
+	}
+}
+
 func (m *Module) syncHandleFromTorrent(th *torrentHandle, session managedTorrent) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -661,6 +857,35 @@ func (m *Module) markCompleted(th *torrentHandle, session managedTorrent) {
 	files := session.Files()
 	for i := range files {
 		files[i].Downloaded = files[i].Size
+	}
+	if storageMode() == "mesh" && m.mesh != nil {
+		if at, ok := session.(*anacrolixTorrent); ok {
+			info := at.t.Info()
+			ih := at.t.InfoHash()
+			if info != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+				assembled, err := m.mesh.AssembleFiles(ctx, info, ih)
+				cancel()
+				if err != nil {
+					slog.Warn("mesh assemble files", "id", th.ID, "error", err, "assembled", len(assembled))
+				}
+				if len(assembled) > 0 {
+					files = make([]fileInfo, 0, len(assembled))
+					for _, a := range assembled {
+						files = append(files, fileInfo{Path: a.URI, Size: a.Size, Downloaded: a.Size})
+					}
+					th.mu.Lock()
+					th.SavePath = storageSavePath(ih.HexString())
+					th.mu.Unlock()
+					slog.Info("mesh assembled files into storage", "id", th.ID, "files", len(assembled))
+				} else if err != nil {
+					// Do not publish a completed event with relative paths that
+					// cannot be imported from mesh piece storage.
+					m.failTorrent(th, fmt.Errorf("mesh assemble: %w", err))
+					return
+				}
+			}
+		}
 	}
 	th.mu.Lock()
 	th.Status = "completed"
@@ -731,7 +956,10 @@ func (m *Module) publishDownloadEvent(eventType string, th *torrentHandle, errSt
 		return
 	}
 	th.mu.RLock()
-	savePath := resolveSavePath(m.dlDir, th.SavePath)
+	savePath := th.SavePath
+	if !strings.HasPrefix(savePath, "storage://") {
+		savePath = resolveSavePath(m.dlDir, savePath)
+	}
 	payload := contracts.DownloadEventPayload{
 		ID:       th.ID,
 		Name:     th.Name,
@@ -741,7 +969,10 @@ func (m *Module) publishDownloadEvent(eventType string, th *torrentHandle, errSt
 		Error:    errStr,
 	}
 	for _, f := range th.Files {
-		p := joinSaveAndRelPath(savePath, f.Path)
+		p := f.Path
+		if !strings.HasPrefix(p, "storage://") {
+			p = joinSaveAndRelPath(savePath, f.Path)
+		}
 		payload.Files = append(payload.Files, contracts.DownloadEventFile{Path: p, Size: f.Size})
 	}
 	th.mu.RUnlock()
@@ -780,19 +1011,32 @@ func (m *Module) RemoveTorrent(ctx context.Context, req *downloaderv1.RemoveTorr
 	session := th.session
 	savePath := th.SavePath
 	name := th.Name
+	infoHash := th.InfoHash
 	files := append([]fileInfo(nil), th.Files...)
 	th.mu.Unlock()
 	if session != nil {
 		session.Drop()
 	}
 	if req.GetDeleteFiles() {
-		m.deleteTorrentData(savePath, name, files)
+		m.deleteTorrentData(savePath, name, infoHash, files)
 	}
 	m.persistActiveTorrents()
 	return &downloaderv1.RemoveTorrentResponse{}, nil
 }
 
-func (m *Module) deleteTorrentData(savePath, name string, files []fileInfo) {
+func (m *Module) deleteTorrentData(savePath, name, infoHash string, files []fileInfo) {
+	if storageMode() == "mesh" && m.mesh != nil {
+		h, ok := parseStorageInfoHash(savePath)
+		if !ok {
+			h, ok = decodeInfoHash(infoHash)
+		}
+		if ok {
+			if err := m.mesh.DeleteTorrent(context.Background(), h); err != nil {
+				slog.Warn("mesh delete torrent", "hash", infoHash, "error", err)
+			}
+		}
+		return
+	}
 	for _, f := range files {
 		_ = os.RemoveAll(joinSaveAndRelPath(savePath, f.Path))
 	}

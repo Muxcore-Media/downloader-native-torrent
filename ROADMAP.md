@@ -11,9 +11,13 @@
 - [x] Pause / Resume RPCs (align with contracts-downloader)
 - [x] Expose shared `contracts-downloader` `DownloaderService` (local `TorrentService` retained)
 - [x] Soften hardcoded VPN kill-switch iface/endpoint assumptions
-
-## Remaining
-
 - [x] File selection priorities
 - [x] DHT / PEX tuning knobs via settings
 - [x] Persist / restore active torrents across process restart
+- [x] Mesh StorageService piece store + seed-from-storage (`DOWNLOAD_STORAGE=mesh`)
+
+## Remaining
+
+- [x] Assemble completed piece objects into per-file storage keys for scanner ImportPath without a local watch dir
+- [x] Per-file wanted / priority via settings (`torrent_file_priority`, `recheck_torrent`)
+- [x] Persist active torrent session list in storage (`torrent/sessions.json`) instead of local JSON when mesh mode
