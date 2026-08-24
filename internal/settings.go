@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -185,7 +186,7 @@ func (m *Module) recheckTorrent(id string) error {
 	if !ok || at == nil || at.t == nil {
 		return fmt.Errorf("recheck requires live anacrolix session")
 	}
-	return at.t.VerifyData()
+	return at.t.VerifyDataContext(context.Background())
 }
 
 func (m *Module) applyTorrentFilePriority(spec string) error {

@@ -269,7 +269,7 @@ func (n *natPMPClient) exchange(req []byte, minResp int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bind nat-pmp socket: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	backoff := natPMPInitialBackoff
 	var lastErr error

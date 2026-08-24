@@ -74,10 +74,6 @@ func meshBackendFromClient(c *client.Client) meshstore.Backend {
 	}
 }
 
-func newMeshStorage(c *client.Client) *meshstore.Client {
-	return meshstore.New(meshBackendFromClient(c))
-}
-
 // storageSavePath returns the logical save path for events / automation.
 // Mesh mode uses a storage:// URI so ImportPath callers can detect non-local paths.
 func storageSavePath(infoHash string) string {
