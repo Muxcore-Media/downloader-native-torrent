@@ -220,7 +220,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 		Roles:        []string{"downloader"},
 		Description:  "Native torrent download engine (anacrolix) with WireGuard VPN and NAT-PMP support",
 		Author:       "MuxCore",
-		Capabilities: []string{"downloader", "downloader.native.torrent", "settings"},
+		Capabilities: []string{"downloader", "downloader.torrent", "downloader.native.torrent", "settings"},
 		Contracts: []contracts.ContractDeclaration{
 			{
 				Repo:      "github.com/Muxcore-Media/contracts-downloader",
@@ -234,6 +234,10 @@ func (m *Module) Info() contracts.ModuleInfo {
 }
 
 func (m *Module) Init(ctx context.Context) error {
+	engine := os.Getenv("DOWNLOADER_ENGINE")
+	if err := enforceLiveDownloaderVPN(m.wgConfPath, engine); err != nil {
+		return err
+	}
 	// Mesh storage needs the core dial before the engine; local mode needs the dir now.
 	if storageMode() == "local" {
 		if err := os.MkdirAll(m.dlDir, 0755); err != nil {
@@ -869,21 +873,22 @@ func (m *Module) markCompleted(th *torrentHandle, session managedTorrent) {
 				if err != nil {
 					slog.Warn("mesh assemble files", "id", th.ID, "error", err, "assembled", len(assembled))
 				}
-				if len(assembled) > 0 {
-					files = make([]fileInfo, 0, len(assembled))
-					for _, a := range assembled {
-						files = append(files, fileInfo{Path: a.URI, Size: a.Size, Downloaded: a.Size})
+				if err != nil || len(assembled) == 0 {
+					msg := "mesh assemble produced no files"
+					if err != nil {
+						msg = fmt.Sprintf("mesh assemble: %v", err)
 					}
-					th.mu.Lock()
-					th.SavePath = storageSavePath(ih.HexString())
-					th.mu.Unlock()
-					slog.Info("mesh assembled files into storage", "id", th.ID, "files", len(assembled))
-				} else if err != nil {
-					// Do not publish a completed event with relative paths that
-					// cannot be imported from mesh piece storage.
-					m.failTorrent(th, fmt.Errorf("mesh assemble: %w", err))
+					m.failTorrent(th, fmt.Errorf("%s", msg))
 					return
 				}
+				files = make([]fileInfo, 0, len(assembled))
+				for _, a := range assembled {
+					files = append(files, fileInfo{Path: a.URI, Size: a.Size, Downloaded: a.Size})
+				}
+				th.mu.Lock()
+				th.SavePath = storageSavePath(ih.HexString())
+				th.mu.Unlock()
+				slog.Info("mesh assembled files into storage", "id", th.ID, "files", len(assembled))
 			}
 		}
 	}

@@ -4,9 +4,9 @@ go 1.26.4
 
 require (
 	github.com/Muxcore-Media/contracts-downloader v0.1.0
-	github.com/Muxcore-Media/core/pkg/contracts v0.5.2
-	github.com/Muxcore-Media/core/sdk/go/client v0.5.1
-	github.com/Muxcore-Media/core/sdk/go/module v0.5.2
+	github.com/Muxcore-Media/core/pkg/contracts v0.5.8
+	github.com/Muxcore-Media/core/sdk/go/client v0.5.8
+	github.com/Muxcore-Media/core/sdk/go/module v0.5.8
 	github.com/anacrolix/torrent v1.61.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6
 	google.golang.org/grpc v1.82.1
@@ -16,7 +16,7 @@ require (
 
 
 require (
-	github.com/Muxcore-Media/core v0.5.1 // indirect
+	github.com/Muxcore-Media/core v0.5.8 // indirect
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
