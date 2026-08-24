@@ -81,7 +81,7 @@ func TestNatPmpUDPAndTCPMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 	gwPort := pc.LocalAddr().(*net.UDPAddr).Port
 
 	go func() {
@@ -165,7 +165,7 @@ func TestRebindKeepsClientOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	old := eng.client
 	if old == nil {
 		t.Fatal("expected client")
@@ -189,7 +189,7 @@ func TestRebindUpdatesHostAndPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	old := eng.client
 	if err := eng.rebind("127.0.0.1", 0); err != nil {
 		t.Fatal(err)
@@ -216,7 +216,7 @@ func TestPieceCompletionOpensAfterCleanClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second engine on same dir: %v", err)
 	}
-	defer eng2.Close()
+	defer func() { _ = eng2.Close() }()
 }
 
 func TestRebindReusesPieceCompletion(t *testing.T) {
@@ -226,7 +226,7 @@ func TestRebindReusesPieceCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 	st := eng.storage
 	if err := eng.rebind("127.0.0.1", 0); err != nil {
 		t.Fatal(err)

@@ -143,7 +143,7 @@ func NewModule(cfg Config) *Module {
 		cfg.WGKillSwitch = true
 	}
 	if v := os.Getenv("NAT_PMP_PORT"); v != "" {
-		fmt.Sscanf(v, "%d", &cfg.NatPMPPort)
+		_, _ = fmt.Sscanf(v, "%d", &cfg.NatPMPPort)
 	}
 	if v := os.Getenv("TORRENT_LISTEN_PORT"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil && p > 0 {
@@ -401,9 +401,9 @@ func (m *Module) Stop(ctx context.Context) error {
 		_ = m.engine.Close()
 	}
 	m.natPMP.stop()
-	m.vpn.stop()
+	_ = m.vpn.stop()
 	if m.mc != nil {
-		m.mc.Close()
+		_ = m.mc.Close()
 	}
 	if m.grpcSrv != nil {
 		m.grpcSrv.GracefulStop()
@@ -1164,7 +1164,7 @@ func (m *Module) VpnStart(ctx context.Context, req *downloaderv1.VpnStartRequest
 
 func (m *Module) VpnStop(ctx context.Context, req *downloaderv1.VpnStopRequest) (*downloaderv1.VpnStopResponse, error) {
 	m.natPMP.stop()
-	m.vpn.stop()
+	_ = m.vpn.stop()
 	return &downloaderv1.VpnStopResponse{Stopped: true}, nil
 }
 

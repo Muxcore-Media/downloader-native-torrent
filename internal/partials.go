@@ -276,7 +276,6 @@ const (
 )
 
 func verifyMappedPieces(mapped []diskFile, layout pieceLayout) int {
-	sawFull := false
 	for i, h := range layout.PieceHashes {
 		off := int64(i) * layout.PieceLength
 		plen := layout.PieceLength
@@ -290,17 +289,13 @@ func verifyMappedPieces(mapped []diskFile, layout pieceLayout) int {
 		if !ok {
 			continue
 		}
-		sawFull = true
 		sum := sha1.Sum(data)
 		if hex.EncodeToString(sum[:]) == hex.EncodeToString(h) {
 			return pieceMatch
 		}
 		return pieceMismatch
 	}
-	if !sawFull {
-		return pieceUnknown
-	}
-	return pieceMismatch
+	return pieceUnknown
 }
 
 func linkMappedFiles(mapped []diskFile, layout []fileInfo, destRoot string) error {
@@ -330,7 +325,7 @@ func linkOrCopy(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err

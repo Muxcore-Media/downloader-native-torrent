@@ -61,14 +61,6 @@ type anacrolixEngineOpts struct {
 	MeshStorage storage.ClientImplCloser // when set, no local DOWNLOAD_DIR piece store
 }
 
-func newAnacrolixEngine(dataDir string, listenPort int, listenHost string, hc *http.Client) (*anacrolixEngine, error) {
-	return newAnacrolixEngineOpts(dataDir, listenPort, hc, anacrolixEngineOpts{
-		ListenHost: listenHost,
-		EnableDHT:  true,
-		EnablePEX:  true,
-	})
-}
-
 func newAnacrolixEngineOpts(dataDir string, listenPort int, hc *http.Client, opts anacrolixEngineOpts) (*anacrolixEngine, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
@@ -394,7 +386,7 @@ func (a *anacrolixTorrent) ActivePeers() int {
 func (a *anacrolixTorrent) ConnectedSeeders() int {
 	return a.t.Stats().ConnectedSeeders
 }
-func (a *anacrolixTorrent) Drop()                 { a.t.Drop() }
+func (a *anacrolixTorrent) Drop() { a.t.Drop() }
 
 func classifyURI(uri string) (string, error) {
 	u := strings.TrimSpace(uri)
@@ -444,7 +436,7 @@ func fetchTorrentFile(ctx context.Context, hc *http.Client, uri string) ([]byte,
 	if err != nil {
 		return nil, "", fmt.Errorf("fetch torrent: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if loc := resp.Header.Get("Location"); isMagnetURI(loc) {
 		return nil, strings.TrimSpace(loc), nil
 	}
