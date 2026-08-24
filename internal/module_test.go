@@ -33,7 +33,7 @@ func newTestModuleWithEngine(t *testing.T, eng torrentEngine) *Module {
 	if err := m.Init(ctx); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	t.Cleanup(func() { m.Stop(ctx) })
+	t.Cleanup(func() { _ = m.Stop(ctx) })
 	return m
 }
 
@@ -202,7 +202,7 @@ func TestRemoveTorrent(t *testing.T) {
 	ctx := context.Background()
 
 	add, _ := m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC&dn=RemoveMe"})
-	m.RemoveTorrent(ctx, &downloaderv1.RemoveTorrentRequest{Id: add.Id})
+	_, _ = m.RemoveTorrent(ctx, &downloaderv1.RemoveTorrentRequest{Id: add.Id})
 
 	_, err := m.GetTorrent(ctx, &downloaderv1.GetTorrentRequest{Id: add.Id})
 	if err == nil {
@@ -214,8 +214,8 @@ func TestListTorrents(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
 
-	m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1&dn=One"})
-	m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2&dn=Two"})
+	_, _ = m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1&dn=One"})
+	_, _ = m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2D2&dn=Two"})
 
 	resp, err := m.ListTorrents(ctx, &downloaderv1.ListTorrentsRequest{})
 	if err != nil {
@@ -230,7 +230,7 @@ func TestListTorrentsFilterDownloading(t *testing.T) {
 	m := newTestModule(t)
 	ctx := context.Background()
 
-	m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1&dn=Test"})
+	_, _ = m.AddTorrent(ctx, &downloaderv1.AddTorrentRequest{Uri: "magnet:?xt=urn:btih:E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1&dn=Test"})
 
 	resp, err := m.ListTorrents(ctx, &downloaderv1.ListTorrentsRequest{Filter: "seeding-only-no-match"})
 	if err != nil {
@@ -309,7 +309,6 @@ func TestFixtureEngineWritesVideo(t *testing.T) {
 	}
 	t.Fatal("timed out waiting for completed")
 }
-
 
 func TestAddTorrentPaused(t *testing.T) {
 	eng := &fakeEngine{instantComplete: true}
@@ -390,7 +389,7 @@ func TestClassifyURI(t *testing.T) {
 
 func TestFetchTorrentFileHTTPtest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not-a-real-torrent-but-fetched"))
+		_, _ = w.Write([]byte("not-a-real-torrent-but-fetched"))
 	}))
 	t.Cleanup(srv.Close)
 	data, magnet, err := fetchTorrentFile(context.Background(), srv.Client(), srv.URL+"/x.torrent")
@@ -427,7 +426,7 @@ func TestFetchTorrentFileMagnetRedirect(t *testing.T) {
 func TestFetchTorrentFileTooLarge(t *testing.T) {
 	big := strings.Repeat("a", maxTorrentFileBytes+10)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(big))
+		_, _ = w.Write([]byte(big))
 	}))
 	t.Cleanup(srv.Close)
 	_, _, err := fetchTorrentFile(context.Background(), srv.Client(), srv.URL)
@@ -492,7 +491,6 @@ func TestNatPmpStatusNotEnabled(t *testing.T) {
 		t.Fatal("expected NAT-PMP not enabled")
 	}
 }
-
 
 func TestDeriveInterfaceName(t *testing.T) {
 	iface := deriveInterfaceName("/path/to/wg-us-tx.conf")

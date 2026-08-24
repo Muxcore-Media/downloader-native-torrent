@@ -21,7 +21,7 @@ func TestEnforceLiveDownloaderVPNReadableConf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	_ = f.Close()
 	t.Setenv("WG_CONF", f.Name())
 	if err := enforceLiveDownloaderVPN("", "live"); err != nil {

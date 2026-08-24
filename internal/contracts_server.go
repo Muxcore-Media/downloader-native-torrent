@@ -147,19 +147,19 @@ func mapTorrentInfo(t *downloaderv1.TorrentInfo) *cdlv1.TorrentInfo {
 		return nil
 	}
 	info := &cdlv1.TorrentInfo{
-		Id:           t.GetId(),
-		Name:         t.GetName(),
-		InfoHash:     t.GetInfoHash(),
-		Size:         t.GetTotalSize(),
-		Downloaded:   t.GetDownloaded(),
-		Progress:     t.GetProgress(),
+		Id:            t.GetId(),
+		Name:          t.GetName(),
+		InfoHash:      t.GetInfoHash(),
+		Size:          t.GetTotalSize(),
+		Downloaded:    t.GetDownloaded(),
+		Progress:      t.GetProgress(),
 		DownloadSpeed: int64(t.GetDownloadRate()),
-		UploadSpeed:  int64(t.GetUploadRate()),
-		Seeders:      t.GetSeeders(),
-		Leechers:     t.GetPeers(),
-		Status:       t.GetStatus(),
-		SavePath:     t.GetSavePath(),
-		Category:     t.GetLabel(),
+		UploadSpeed:   int64(t.GetUploadRate()),
+		Seeders:       t.GetSeeders(),
+		Leechers:      t.GetPeers(),
+		Status:        t.GetStatus(),
+		SavePath:      t.GetSavePath(),
+		Category:      t.GetLabel(),
 	}
 	if t.GetAddedAt() != "" {
 		if ts, err := time.Parse(time.RFC3339, t.GetAddedAt()); err == nil {
