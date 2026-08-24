@@ -138,7 +138,7 @@ func wgUp(iface string, cfg parsedConfig) error {
 		return nil
 	}
 	runIgnore := func(args ...string) {
-		exec.Command(args[0], args[1:]...).Run()
+		_ = exec.Command(args[0], args[1:]...).Run()
 	}
 
 	// Create interface
@@ -148,10 +148,10 @@ func wgUp(iface string, cfg parsedConfig) error {
 
 	// Add addresses
 	if cfg.Interface.Address != "" {
-		run("ip", "address", "add", cfg.Interface.Address, "dev", iface)
+		_ = run("ip", "address", "add", cfg.Interface.Address, "dev", iface)
 	}
 	if cfg.Interface.Address6 != "" {
-		run("ip", "-6", "address", "add", cfg.Interface.Address6, "dev", iface)
+		_ = run("ip", "-6", "address", "add", cfg.Interface.Address6, "dev", iface)
 	}
 
 	// Configure via wgctrl (Go netlink – more reliable than `wg set`)
@@ -159,7 +159,7 @@ func wgUp(iface string, cfg parsedConfig) error {
 	if err != nil {
 		return fmt.Errorf("wgctrl: %w", err)
 	}
-	defer wgc.Close()
+	defer func() { _ = wgc.Close() }()
 
 	privKey, err := wgtypes.ParseKey(cfg.Interface.PrivateKey)
 	if err != nil {
@@ -216,19 +216,19 @@ func wgUp(iface string, cfg parsedConfig) error {
 	}
 
 	// Bring up and set routing
-	run("ip", "link", "set", "mtu", "1420", "up", "dev", iface)
-	run("ip", "route", "add", "0.0.0.0/0", "dev", iface, "table", "51820")
-	run("ip", "rule", "add", "not", "fwmark", "51820", "table", "51820")
-	run("ip", "rule", "add", "table", "main", "suppress_prefixlength", "0")
+	_ = run("ip", "link", "set", "mtu", "1420", "up", "dev", iface)
+	_ = run("ip", "route", "add", "0.0.0.0/0", "dev", iface, "table", "51820")
+	_ = run("ip", "rule", "add", "not", "fwmark", "51820", "table", "51820")
+	_ = run("ip", "rule", "add", "table", "main", "suppress_prefixlength", "0")
 	if cfg.Interface.Address6 != "" {
-		run("ip", "-6", "route", "add", "::/0", "dev", iface, "table", "51820")
-		run("ip", "-6", "rule", "add", "not", "fwmark", "51820", "table", "51820")
-		run("ip", "-6", "rule", "add", "table", "main", "suppress_prefixlength", "0")
+		_ = run("ip", "-6", "route", "add", "::/0", "dev", iface, "table", "51820")
+		_ = run("ip", "-6", "rule", "add", "not", "fwmark", "51820", "table", "51820")
+		_ = run("ip", "-6", "rule", "add", "table", "main", "suppress_prefixlength", "0")
 	}
 
 	// Remove stale duplicate rules
 	runIgnore("ip", "rule", "del", "not", "fwmark", "51820", "table", "51820")
-	run("ip", "rule", "add", "not", "fwmark", "51820", "table", "51820")
+	_ = run("ip", "rule", "add", "not", "fwmark", "51820", "table", "51820")
 
 	// Set DNS
 	_ = exec.Command("sh", "-c", "echo 'nameserver 1.1.1.1\nnameserver 1.0.0.1' > /etc/resolv.conf").Run()
@@ -280,7 +280,7 @@ func removeKillSwitch(iface, peerEndpoint string) {
 		rules = append(rules, []string{"--delete", "OUTPUT", "-o", iface, "-j", "ACCEPT"})
 	}
 	rules = append(rules, []string{"--delete", "OUTPUT", "-j", "DROP"})
-	iptables(rules)
+	_ = iptables(rules)
 }
 
 func splitEndpoint(endpoint string) (host, port string, ok bool) {
