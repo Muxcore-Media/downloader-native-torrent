@@ -29,7 +29,7 @@ func (e *fixtureEngine) AddURI(ctx context.Context, uri, savePath string) (manag
 		name:     name,
 		hash:     hash,
 		savePath: savePath,
-		total:    8 * 1024,
+		total:    fixturePayloadSize(8 * 1024),
 	}
 	e.mu.Lock()
 	e.torrents = append(e.torrents, ft)
@@ -94,17 +94,18 @@ func (f *fixtureManaged) DownloadAll() {
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 			return
 		}
-		payload := make([]byte, total)
-		for i := range payload {
-			payload[i] = byte(i % 251)
-		}
-		if err := os.WriteFile(abs, payload, 0o644); err != nil {
+		if err := materializeFixtureFile(abs, total); err != nil {
 			return
 		}
 		f.mu.Lock()
 		f.relPath = filepath.ToSlash(rel)
-		f.done = total
-		f.uploaded = total // satisfy default seed ratio immediately
+		if info, err := os.Stat(abs); err == nil && info.Size() > 0 {
+			f.total = info.Size()
+			f.done = info.Size()
+		} else {
+			f.done = total
+		}
+		f.uploaded = f.done // satisfy default seed ratio immediately
 		f.mu.Unlock()
 	}()
 }
