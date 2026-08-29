@@ -299,6 +299,15 @@ func fetchTorrentMetainfo(ctx context.Context, ihHex string) ([]byte, error) {
 			last = fmt.Errorf("%s: not a torrent file", u)
 			continue
 		}
+		mi, err := metainfo.Load(bytes.NewReader(data))
+		if err != nil {
+			last = fmt.Errorf("%s: parse torrent: %w", u, err)
+			continue
+		}
+		if got := strings.ToLower(mi.HashInfoBytes().HexString()); got != ihHex {
+			last = fmt.Errorf("%s: infohash mismatch (want %s got %s)", u, ihHex, got)
+			continue
+		}
 		return data, nil
 	}
 	if last == nil {
