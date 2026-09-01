@@ -8,7 +8,7 @@ MuxCore sidecar module (`downloader-native-torrent`). Workspace deploy and SSH: 
 |-------|-------|
 | Directory | `downloader-native-torrent` |
 | Capabilities | see muxcore.json |
-| Contracts | none declared |
+| Contracts | `contracts-downloader` `Downloader` v0.1.0 |
 
 ## Agent rules
 
@@ -22,5 +22,5 @@ MuxCore sidecar module (`downloader-native-torrent`). Workspace deploy and SSH: 
 
 ```bash
 cd downloader-native-torrent
-go test ./...
+nix-shell -p go --run 'go test ./...'
 ```

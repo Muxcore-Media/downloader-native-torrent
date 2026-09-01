@@ -82,8 +82,12 @@ func (v *vpnManager) start(configPath string, enableKill bool) error {
 	}
 
 	if enableKill {
+		if err := validateKillSwitch(true); err != nil {
+			return err
+		}
 		if err := applyKillSwitch(iface, peerEP); err != nil {
 			slog.Warn("vpn: kill switch setup failed", "error", err)
+			return fmt.Errorf("kill switch: %w", err)
 		}
 	}
 
@@ -230,8 +234,12 @@ func wgUp(iface string, cfg parsedConfig) error {
 	runIgnore("ip", "rule", "del", "not", "fwmark", "51820", "table", "51820")
 	_ = run("ip", "rule", "add", "not", "fwmark", "51820", "table", "51820")
 
-	// Set DNS
-	_ = exec.Command("sh", "-c", "echo 'nameserver 1.1.1.1\nnameserver 1.0.0.1' > /etc/resolv.conf").Run()
+	// Set DNS from WireGuard config when provided; do not clobber resolv.conf otherwise.
+	if len(cfg.Interface.DNS) > 0 {
+		if err := writeResolvConf(cfg.Interface.DNS); err != nil {
+			slog.Warn("vpn: write resolv.conf", "error", err)
+		}
+	}
 
 	// Wait for handshake using wgctrl (more precise)
 	if err := waitForHandshakeWGCTL(wgc, iface, 90*time.Second); err != nil {
@@ -249,9 +257,6 @@ func teardownInterface(iface string) {
 // ── Kill switch (iptables – no policy changes, host-safe) ───
 
 func applyKillSwitch(iface, peerEndpoint string) error {
-	_ = exec.Command("sh", "-c",
-		"echo 'nameserver 1.1.1.1\nnameserver 1.0.0.1' > /etc/resolv.conf",
-	).Run()
 	rules := [][]string{
 		{"--append", "OUTPUT", "-o", "lo", "-j", "ACCEPT"},
 		{"--append", "OUTPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"},
@@ -304,6 +309,7 @@ func iptables(rules [][]string) error {
 		cmd := exec.Command("iptables", r...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			slog.Warn("vpn: iptables", "rule", r, "error", err, "output", string(out))
+			return fmt.Errorf("iptables %v: %w", r, err)
 		}
 	}
 	return nil

@@ -52,6 +52,8 @@ type Module struct {
 
 	persistMu sync.Mutex
 	stopping  bool
+
+	meshSessions meshSessionStore // optional test hook for torrent/sessions.json
 }
 
 // filePriorityApplier is optional on managedTorrent (anacrolix).
@@ -75,6 +77,7 @@ type torrentHandle struct {
 	Seeders      int32
 	UploadRate   int32
 	DownloadRate int32
+	Uploaded     int64
 	ErrorStr     string
 	CompletedAt  *time.Time
 	Files        []fileInfo
@@ -89,6 +92,7 @@ type fileInfo struct {
 	Path       string
 	Size       int64
 	Downloaded int64
+	Wanted     bool
 }
 
 type Config struct {
@@ -106,6 +110,7 @@ type Config struct {
 	EnablePEX        *bool
 	Engine           torrentEngine // optional; tests inject a fake
 	InfoTimeout      time.Duration
+	MeshSessions     meshSessionStore
 }
 
 func NewModule(cfg Config) *Module {
@@ -198,6 +203,7 @@ func NewModule(cfg Config) *Module {
 		torrents:         make(map[string]*torrentHandle),
 		vpn:              newVPNManager(),
 		natPMP:           newNATPMPClient(),
+		meshSessions:     cfg.MeshSessions,
 	}
 }
 
@@ -234,9 +240,11 @@ func (m *Module) Info() contracts.ModuleInfo {
 }
 
 func (m *Module) Init(ctx context.Context) error {
-	engine := os.Getenv("DOWNLOADER_ENGINE")
-	if err := enforceLiveDownloaderVPN(m.wgConfPath, engine); err != nil {
-		return err
+	engineEnv := os.Getenv("DOWNLOADER_ENGINE")
+	if m.engine == nil {
+		if err := enforceLiveDownloaderVPN(m.wgConfPath, engineEnv); err != nil {
+			return err
+		}
 	}
 	// Mesh storage needs the core dial before the engine; local mode needs the dir now.
 	if storageMode() == "local" {
@@ -286,6 +294,10 @@ func (m *Module) autoStartVPN() {
 	}
 
 	ks := m.wgKillSwitch || os.Getenv("WG_KILL_SWITCH") == "true"
+	if err := validateKillSwitch(ks); err != nil {
+		slog.Warn("auto-start wireguard skipped kill switch", "error", err)
+		ks = false
+	}
 	slog.Info("auto-starting wireguard", "config", cfgPath)
 
 	if err := m.vpn.start(cfgPath, ks); err != nil {
@@ -331,11 +343,7 @@ func (m *Module) rebindTorrent(host string, port int, iface string) {
 	m.mu.Lock()
 	m.listenPort = port
 	m.mu.Unlock()
-	eng, ok := m.engine.(*anacrolixEngine)
-	if !ok {
-		return
-	}
-	if err := eng.rebind(host, port); err != nil {
+	if err := m.rebindEngine(host, port); err != nil {
 		slog.Warn("vpn: bind torrent client to wireguard ip failed", "ip", host, "port", port, "error", err)
 		return
 	}
@@ -563,6 +571,11 @@ func (m *Module) resolveIndexerURI(ctx context.Context, th *torrentHandle, uri s
 func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, paused bool) {
 	defer close(th.done)
 
+	if err := m.requireVPNConnected(ctx); err != nil {
+		m.failTorrent(th, err)
+		return
+	}
+
 	uri = m.resolveIndexerURI(ctx, th, uri)
 
 	session, err := m.engine.AddURI(ctx, uri, th.SavePath)
@@ -715,6 +728,7 @@ func (m *Module) runTorrent(ctx context.Context, th *torrentHandle, uri string, 
 			th.mu.Lock()
 			th.Downloaded = completed
 			th.TotalSize = session.TotalLength()
+			th.Uploaded = uploaded
 			th.Peers = int32(session.ActivePeers())
 			th.Seeders = int32(session.ConnectedSeeders())
 			th.DownloadRate = dlRate
@@ -746,7 +760,7 @@ func (m *Module) rescueWaitInfoWithCache(ctx context.Context, th *torrentHandle,
 	if len(hash) != 40 {
 		return nil, fmt.Errorf("no infohash for metadata rescue")
 	}
-	if _, err := fetchTorrentMetainfo(ctx, hash); err != nil {
+	if _, err := fetchTorrentMetainfoWith(ctx, hash, defaultMetainfoHTTPClient(), m.mesh); err != nil {
 		return nil, err
 	}
 	session.Drop()
@@ -854,6 +868,26 @@ func (m *Module) syncHandleFromTorrent(th *torrentHandle, session managedTorrent
 	}
 	th.TotalSize = session.TotalLength()
 	th.Files = session.Files()
+	m.syncFileWanted(th, session)
+}
+
+func (m *Module) syncFileWanted(th *torrentHandle, session managedTorrent) {
+	m.mu.RLock()
+	mode := m.filePriorityMode
+	m.mu.RUnlock()
+	paths := make([]string, len(th.Files))
+	for i, f := range th.Files {
+		paths[i] = f.Path
+	}
+	want := selectFilesToDownload(paths, mode)
+	for i := range th.Files {
+		if len(want) == len(th.Files) {
+			th.Files[i].Wanted = want[i]
+		} else {
+			th.Files[i].Wanted = true
+		}
+	}
+	_ = session
 }
 
 func (m *Module) markCompleted(th *torrentHandle, session managedTorrent) {
@@ -893,24 +927,32 @@ func (m *Module) markCompleted(th *torrentHandle, session managedTorrent) {
 		}
 	}
 	th.mu.Lock()
-	th.Status = "completed"
+	th.Status = "seeding"
 	th.Downloaded = session.TotalLength()
 	th.TotalSize = session.TotalLength()
 	th.DownloadRate = 0
+	th.Uploaded = session.BytesUploaded()
 	th.CompletedAt = &now
 	th.Files = files
 	th.mu.Unlock()
 	m.persistActiveTorrents()
 	m.publishDownloadEvent(contracts.EventDownloadCompleted, th, "")
-	slog.Info("download completed", "id", th.ID, "name", th.Name)
+	slog.Info("download completed; seeding", "id", th.ID, "name", th.Name)
 }
 
 func (m *Module) seedUntilDone(ctx context.Context, th *torrentHandle, session managedTorrent) {
 	deadline := time.Now().Add(time.Duration(m.seedMinutes) * time.Minute)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var lastUp int64
+	lastTick := time.Now()
 	for {
 		if m.seedRatioReached(th, session) || time.Now().After(deadline) {
+			th.mu.Lock()
+			th.Status = "completed"
+			th.UploadRate = 0
+			th.mu.Unlock()
+			m.persistActiveTorrents()
 			slog.Info("seeding finished", "id", th.ID, "ratio_target", m.seedRatio)
 			return
 		}
@@ -919,11 +961,22 @@ func (m *Module) seedUntilDone(ctx context.Context, th *torrentHandle, session m
 			return
 		case <-ticker.C:
 			up := session.BytesUploaded()
+			now := time.Now()
+			elapsed := now.Sub(lastTick).Seconds()
+			var upRate int32
+			if elapsed > 0 {
+				upRate = int32(float64(up-lastUp) / elapsed)
+				if upRate < 0 {
+					upRate = 0
+				}
+			}
+			lastUp = up
+			lastTick = now
 			th.mu.Lock()
-			th.UploadRate = 0
+			th.Uploaded = up
+			th.UploadRate = upRate
 			th.Peers = int32(session.ActivePeers())
 			th.Seeders = int32(session.ConnectedSeeders())
-			_ = up
 			th.mu.Unlock()
 		}
 	}
@@ -1066,10 +1119,7 @@ func (m *Module) ListTorrents(ctx context.Context, req *downloaderv1.ListTorrent
 	filter := req.GetFilter()
 	list := make([]*downloaderv1.TorrentInfo, 0, len(m.torrents))
 	for _, th := range m.torrents {
-		th.mu.RLock()
-		s := th.Status
-		th.mu.RUnlock()
-		if filter != "" && filter != "all" && s != filter {
+		if !torrentMatchesListFilter(th, filter, "", "") {
 			continue
 		}
 		list = append(list, th.toProto())
@@ -1078,6 +1128,22 @@ func (m *Module) ListTorrents(ctx context.Context, req *downloaderv1.ListTorrent
 		list = []*downloaderv1.TorrentInfo{}
 	}
 	return &downloaderv1.ListTorrentsResponse{Torrents: list}, nil
+}
+
+func torrentMatchesListFilter(th *torrentHandle, legacyFilter, category, status string) bool {
+	th.mu.RLock()
+	defer th.mu.RUnlock()
+	if category != "" && !strings.EqualFold(th.Label, category) {
+		return false
+	}
+	stFilter := status
+	if stFilter == "" && legacyFilter != "" && legacyFilter != "all" {
+		stFilter = legacyFilter
+	}
+	if stFilter != "" && stFilter != "all" && th.Status != stFilter {
+		return false
+	}
+	return true
 }
 
 // ── VPN operations ────────────────────────────────────────────
@@ -1098,6 +1164,55 @@ func (m *Module) ResumeTorrent(_ context.Context, req *downloaderv1.ResumeTorren
 	return &downloaderv1.ResumeTorrentResponse{Success: ok}, nil
 }
 
+func (m *Module) pauseTorrent(id string) (bool, error) {
+	m.mu.RLock()
+	th, ok := m.torrents[id]
+	m.mu.RUnlock()
+	if !ok {
+		return false, fmt.Errorf("torrent %q not found", id)
+	}
+	th.mu.Lock()
+	if th.Status == "completed" || th.Status == "error" || th.Status == "removed" {
+		th.mu.Unlock()
+		return false, fmt.Errorf("cannot pause torrent in status %s", th.Status)
+	}
+	if th.session != nil {
+		th.session.PauseDownload()
+	}
+	th.Status = "paused"
+	th.mu.Unlock()
+	m.persistActiveTorrents()
+	return true, nil
+}
+
+func (m *Module) resumeTorrent(id string) (bool, error) {
+	m.mu.RLock()
+	th, ok := m.torrents[id]
+	m.mu.RUnlock()
+	if !ok {
+		return false, fmt.Errorf("torrent %q not found", id)
+	}
+	th.mu.Lock()
+	if th.Status != "paused" {
+		th.mu.Unlock()
+		return false, fmt.Errorf("torrent is not paused")
+	}
+	session := th.session
+	th.Status = "downloading"
+	resumeCh := th.resumeCh
+	th.mu.Unlock()
+
+	select {
+	case resumeCh <- struct{}{}:
+	default:
+	}
+	if session != nil {
+		m.beginDownload(session)
+	}
+	m.persistActiveTorrents()
+	return true, nil
+}
+
 func (m *Module) beginDownload(session managedTorrent) {
 	m.mu.RLock()
 	mode := m.filePriorityMode
@@ -1107,6 +1222,25 @@ func (m *Module) beginDownload(session managedTorrent) {
 		return
 	}
 	session.DownloadAll()
+}
+
+func (m *Module) applyFilePriorityToAllSessions(mode string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, th := range m.torrents {
+		th.mu.RLock()
+		session := th.session
+		th.mu.RUnlock()
+		if session == nil {
+			continue
+		}
+		if ap, ok := session.(filePriorityApplier); ok {
+			ap.ApplyFilePriorities(mode)
+		} else {
+			session.DownloadAll()
+		}
+		m.syncFileWanted(th, session)
+	}
 }
 
 func (m *Module) GetCapabilities(context.Context, *downloaderv1.GetCapabilitiesRequest) (*downloaderv1.GetCapabilitiesResponse, error) {
@@ -1142,6 +1276,10 @@ func (m *Module) VpnStart(ctx context.Context, req *downloaderv1.VpnStartRequest
 	}
 	if configFile == "" {
 		return nil, fmt.Errorf("config_file is required (or set WG_CONF env)")
+	}
+
+	if err := validateKillSwitch(req.GetEnableKillSwitch()); err != nil {
+		return &downloaderv1.VpnStartResponse{Started: false, Error: err.Error()}, nil
 	}
 
 	if err := m.vpn.start(configFile, req.GetEnableKillSwitch()); err != nil {
@@ -1217,6 +1355,7 @@ func (th *torrentHandle) toProto() *downloaderv1.TorrentInfo {
 		AddedAt:      th.AddedAt.Format(time.RFC3339),
 		Files:        files,
 	}
+	_ = th.Uploaded // contracts layer reads Uploaded from handle via mapTorrentInfoFromHandle
 	if th.CompletedAt != nil {
 		info.CompletedAt = th.CompletedAt.Format(time.RFC3339)
 	}

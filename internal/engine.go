@@ -128,6 +128,15 @@ func (e *anacrolixEngine) newClient(host string, port int) (*torrent.Client, err
 	return torrent.NewClient(cfg)
 }
 
+func (e *anacrolixEngine) setDataDir(dir string) { e.dataDir = dir }
+
+func (e *anacrolixEngine) meshMetaReader() meshMetaReader {
+	if ms, ok := e.storage.(*meshstore.Client); ok {
+		return ms
+	}
+	return nil
+}
+
 func openPieceCompletionRetry(dir string) (storage.PieceCompletion, error) {
 	const attempts = 10
 	wait := 200 * time.Millisecond
@@ -213,7 +222,7 @@ func (e *anacrolixEngine) AddURI(ctx context.Context, uri, savePath string) (man
 // GotInfo is immediate instead of waiting on DHT/PEX for magnet metadata.
 func (e *anacrolixEngine) addMagnetPreferMetainfo(ctx context.Context, magnet, savePath string) (managedTorrent, error) {
 	if hash := strings.ToLower(parseInfoHash(magnet)); hash != "" {
-		if meta, err := fetchTorrentMetainfo(ctx, hash); err == nil {
+		if meta, err := fetchTorrentMetainfoWith(ctx, hash, e.http, e.meshMetaReader()); err == nil {
 			slog.Info("resolved magnet via torrent cache", "infohash", hash, "bytes", len(meta))
 			return e.addTorrentBytes(meta, savePath)
 		} else {

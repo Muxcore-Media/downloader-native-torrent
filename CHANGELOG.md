@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.8 (2026-08-31)
+
+- VPN rebind migrates live torrent sessions onto the new anacrolix client instead of dropping them.
+- Public itorrents metainfo cache is opt-in (`DOWNLOADER_PUBLIC_METAINFO_CACHE`); fixture/fake engines skip it; mesh `GetMeta`/`PutMeta` preferred.
+- `contracts-downloader` adapter: `SupportsFileSelection=true`, AND category/status filters, uploaded bytes and per-file `Wanted`.
+- Live settings: `listen_port` rebinds engine, `download_path` retargets local dir, `file_priority` applies to active sessions; `seed_ratio` / `seed_minutes` exposed.
+- VPN: honor WireGuard `DNS=`, iptables fail-closed, refuse `WG_KILL_SWITCH` on shared hosts unless `WG_KILL_SWITCH_ALLOW=true`.
+- Live engine gates `AddURI` until WireGuard connects; completed/error torrents persist in session history; seeding reports upload rate and `seeding` status.
+- Tests: contracts server, mesh `torrent/sessions.json`, rebind migration; Forgejo CI runs `golangci-lint`.
+
 ## v0.3.1 (2026-08-20)
 
 - Settings: `recheck_torrent` (VerifyData) and `torrent_file_priority` (`<id>:<all|episodes|season_packs>`).
