@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +22,10 @@ type persistedTorrent struct {
 	SavePath string `json:"save_path"`
 	Label    string `json:"label,omitempty"`
 	Paused   bool   `json:"paused,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Name     string `json:"name,omitempty"`
+	InfoHash string `json:"info_hash,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 type torrentSession struct {
@@ -36,11 +38,39 @@ func (m *Module) sessionPath() string {
 
 func isPersistableStatus(st string) bool {
 	switch st {
-	case "queued", "downloading", "paused":
+	case "queued", "downloading", "paused", "seeding", "completed", "error":
 		return true
 	default:
 		return false
 	}
+}
+
+func isRestorableRunningStatus(st string) bool {
+	switch st {
+	case "queued", "downloading", "paused", "":
+		return true
+	default:
+		return false
+	}
+}
+
+// meshSessionStore persists torrent/sessions.json in mesh mode (tests inject a mock).
+type meshSessionStore interface {
+	PutBytes(ctx context.Context, key string, data []byte) error
+	GetBytes(ctx context.Context, key string, offset, length int64) ([]byte, error)
+}
+
+func (m *Module) meshSessionBackend() meshSessionStore {
+	if m.meshSessions != nil {
+		return m.meshSessions
+	}
+	m.mu.RLock()
+	mc := m.mc
+	m.mu.RUnlock()
+	if mc != nil {
+		return mc.Storage
+	}
+	return nil
 }
 
 func (m *Module) persistActiveTorrents() {
@@ -56,6 +86,7 @@ func (m *Module) persistActiveTorrents() {
 	for _, th := range m.torrents {
 		th.mu.RLock()
 		st, uri, id, save, label := th.Status, th.URI, th.ID, th.SavePath, th.Label
+		name, hash, errStr := th.Name, th.InfoHash, th.ErrorStr
 		th.mu.RUnlock()
 		if uri == "" || id == "" || !isPersistableStatus(st) {
 			continue
@@ -66,9 +97,12 @@ func (m *Module) persistActiveTorrents() {
 			SavePath: save,
 			Label:    label,
 			Paused:   st == "paused",
+			Status:   st,
+			Name:     name,
+			InfoHash: hash,
+			Error:    errStr,
 		})
 	}
-	mc := m.mc
 	m.mu.RUnlock()
 
 	data, err := json.MarshalIndent(torrentSession{Torrents: recs}, "", "  ")
@@ -76,13 +110,16 @@ func (m *Module) persistActiveTorrents() {
 		slog.Warn("persist torrents marshal", "error", err)
 		return
 	}
-	if storageMode() == "mesh" && mc != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := mc.Storage.PutBytes(ctx, "torrent/sessions.json", data); err != nil {
-			slog.Warn("persist torrents to mesh storage", "error", err)
+	if storageMode() == "mesh" {
+		store := m.meshSessionBackend()
+		if store != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := store.PutBytes(ctx, "torrent/sessions.json", data); err != nil {
+				slog.Warn("persist torrents to mesh storage", "error", err)
+			}
+			return
 		}
-		return
 	}
 	path := m.sessionPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -104,12 +141,9 @@ func (m *Module) restorePersistedTorrents() {
 	var data []byte
 	var err error
 	if storageMode() == "mesh" {
-		m.mu.RLock()
-		mc := m.mc
-		m.mu.RUnlock()
-		if mc != nil {
+		if store := m.meshSessionBackend(); store != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			data, err = mc.Storage.GetBytes(ctx, "torrent/sessions.json", 0, 0)
+			data, err = store.GetBytes(ctx, "torrent/sessions.json", 0, 0)
 			cancel()
 			if err != nil {
 				slog.Debug("no mesh torrent session", "error", err)
@@ -152,10 +186,17 @@ func (m *Module) restorePersistedTorrents() {
 		savePath := rec.SavePath
 		if !strings.HasPrefix(savePath, "storage://") {
 			savePath = resolveSavePath(m.dlDir, rec.SavePath)
-			if err := os.MkdirAll(savePath, 0755); err != nil {
-				slog.Warn("restore save path", "id", rec.ID, "error", err)
-				continue
+			if isRestorableRunningStatus(rec.Status) {
+				if err := os.MkdirAll(savePath, 0755); err != nil {
+					slog.Warn("restore save path", "id", rec.ID, "error", err)
+					continue
+				}
 			}
+		}
+		if rec.Status == "completed" || rec.Status == "error" || rec.Status == "seeding" {
+			m.restoreHistoryTorrent(rec, savePath)
+			restored++
+			continue
 		}
 		m.spawnTorrent(rec.ID, rec.URI, savePath, rec.Label, rec.Paused)
 		restored++
@@ -234,7 +275,7 @@ func (m *Module) repairAssembleOne(ctx context.Context, ihHex string) error {
 	}
 	meta, err := m.mesh.GetMeta(ctx, ih)
 	if err != nil || len(meta) == 0 {
-		meta, err = fetchTorrentMetainfo(ctx, ihHex)
+		meta, err = fetchTorrentMetainfoWith(ctx, ihHex, defaultMetainfoHTTPClient(), m.mesh)
 		if err != nil {
 			return fmt.Errorf("metainfo: %w", err)
 		}
@@ -263,57 +304,34 @@ func (m *Module) repairAssembleOne(ctx context.Context, ihHex string) error {
 	return nil
 }
 
-func fetchTorrentMetainfo(ctx context.Context, ihHex string) ([]byte, error) {
-	ihHex = strings.ToLower(strings.TrimSpace(ihHex))
-	upper := strings.ToUpper(ihHex)
-	urls := []string{
-		"https://itorrents.net/torrent/" + upper + ".torrent",
-		"https://itorrents.org/torrent/" + upper + ".torrent",
-		"https://itorrents.org/torrent/" + ihHex + ".torrent",
+func (m *Module) restoreHistoryTorrent(rec persistedTorrent, savePath string) {
+	status := rec.Status
+	if status == "seeding" {
+		status = "completed"
 	}
-	hc := &http.Client{Timeout: 45 * time.Second}
-	var last error
-	for _, u := range urls {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			last = err
-			continue
-		}
-		req.Header.Set("User-Agent", "MuxCore-downloader/1.0")
-		resp, err := hc.Do(req)
-		if err != nil {
-			last = err
-			continue
-		}
-		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		_ = resp.Body.Close()
-		if readErr != nil {
-			last = readErr
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			last = fmt.Errorf("%s: status %d", u, resp.StatusCode)
-			continue
-		}
-		if len(data) < 16 || data[0] != 'd' {
-			last = fmt.Errorf("%s: not a torrent file", u)
-			continue
-		}
-		mi, err := metainfo.Load(bytes.NewReader(data))
-		if err != nil {
-			last = fmt.Errorf("%s: parse torrent: %w", u, err)
-			continue
-		}
-		if got := strings.ToLower(mi.HashInfoBytes().HexString()); got != ihHex {
-			last = fmt.Errorf("%s: infohash mismatch (want %s got %s)", u, ihHex, got)
-			continue
-		}
-		return data, nil
+	th := &torrentHandle{
+		ID:       rec.ID,
+		URI:      rec.URI,
+		Name:     rec.Name,
+		InfoHash: rec.InfoHash,
+		Label:    rec.Label,
+		SavePath: savePath,
+		AddedAt:  time.Now(),
+		Status:   status,
+		ErrorStr: rec.Error,
+		Files:    []fileInfo{},
+		done:     make(chan struct{}),
 	}
-	if last == nil {
-		last = fmt.Errorf("no torrent URL candidates")
+	if th.Name == "" {
+		th.Name = parseMagnetName(rec.URI)
 	}
-	return nil, last
+	if th.InfoHash == "" {
+		th.InfoHash = parseInfoHash(rec.URI)
+	}
+	close(th.done)
+	m.mu.Lock()
+	m.torrents[th.ID] = th
+	m.mu.Unlock()
 }
 
 func (m *Module) spawnTorrent(id, uri, savePath, label string, paused bool) *torrentHandle {

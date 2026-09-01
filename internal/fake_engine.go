@@ -14,6 +14,8 @@ type fakeEngine struct {
 	instantComplete bool
 	stuck           bool
 	torrents        []*fakeManaged
+	listenHost      string
+	listenPort      int
 }
 
 func (e *fakeEngine) Close() error { return nil }
@@ -45,17 +47,18 @@ func (e *fakeEngine) AddURI(ctx context.Context, uri, savePath string) (managedT
 }
 
 type fakeManaged struct {
-	mu       sync.Mutex
-	name     string
-	hash     string
-	total    int64
-	done     int64
-	uploaded int64
-	failInfo error
-	instant  bool
-	stuck    bool
-	started  bool
-	dropped  bool
+	mu         sync.Mutex
+	name       string
+	hash       string
+	total      int64
+	done       int64
+	uploaded   int64
+	failInfo   error
+	instant    bool
+	stuck      bool
+	started    bool
+	dropped    bool
+	fileWanted []bool
 }
 
 func (f *fakeManaged) WaitInfo(ctx context.Context) error {
@@ -78,8 +81,32 @@ func (f *fakeManaged) TotalLength() int64 {
 	return f.total
 }
 
+func (f *fakeManaged) ApplyFilePriorities(mode string) {
+	f.mu.Lock()
+	name := f.name
+	f.mu.Unlock()
+	path := name + "/file.bin"
+	want := selectFilesToDownload([]string{path}, mode)
+	f.mu.Lock()
+	f.fileWanted = want
+	f.mu.Unlock()
+	f.DownloadAll()
+}
+
 func (f *fakeManaged) Files() []fileInfo {
-	return []fileInfo{{Path: f.name + "/file.bin", Size: f.total, Downloaded: f.BytesCompleted()}}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	files := []fileInfo{{Path: f.name + "/file.bin", Size: f.total, Downloaded: f.done}}
+	if len(f.fileWanted) == len(files) {
+		for i := range files {
+			files[i].Wanted = f.fileWanted[i]
+		}
+	} else {
+		for i := range files {
+			files[i].Wanted = true
+		}
+	}
+	return files
 }
 
 func (f *fakeManaged) DownloadAll() {

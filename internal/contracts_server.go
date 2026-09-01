@@ -3,7 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
-	"time"
+	"strings"
 
 	cdlv1 "github.com/Muxcore-Media/contracts-downloader/muxcore/downloader/v1"
 	downloaderv1 "github.com/Muxcore-Media/downloader-native-torrent/proto/downloaderv1"
@@ -45,26 +45,33 @@ func (s *contractsServer) RemoveTorrent(ctx context.Context, req *cdlv1.RemoveTo
 }
 
 func (s *contractsServer) GetTorrent(ctx context.Context, req *cdlv1.GetTorrentRequest) (*cdlv1.GetTorrentResponse, error) {
-	resp, err := s.m.GetTorrent(ctx, &downloaderv1.GetTorrentRequest{Id: req.GetTorrentId()})
-	if err != nil {
-		return nil, err
+	s.m.mu.RLock()
+	th, ok := s.m.torrents[req.GetTorrentId()]
+	s.m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("torrent not found: %s", req.GetTorrentId())
 	}
-	return &cdlv1.GetTorrentResponse{Torrent: mapTorrentInfo(resp.GetTorrent())}, nil
+	return &cdlv1.GetTorrentResponse{Torrent: mapTorrentInfoFromHandle(th)}, nil
 }
 
 func (s *contractsServer) ListTorrents(ctx context.Context, req *cdlv1.ListTorrentsRequest) (*cdlv1.ListTorrentsResponse, error) {
-	filter := req.GetCategory()
-	if filter == "" {
-		filter = req.GetStatus()
+	category := req.GetCategory()
+	status := req.GetStatus()
+	s.m.mu.RLock()
+	out := make([]*cdlv1.TorrentInfo, 0, len(s.m.torrents))
+	for _, th := range s.m.torrents {
+		th.mu.RLock()
+		label, st := th.Label, th.Status
+		th.mu.RUnlock()
+		if category != "" && !strings.EqualFold(label, category) {
+			continue
+		}
+		if !torrentMatchesContractStatus(st, status) {
+			continue
+		}
+		out = append(out, mapTorrentInfoFromHandle(th))
 	}
-	resp, err := s.m.ListTorrents(ctx, &downloaderv1.ListTorrentsRequest{Filter: filter})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*cdlv1.TorrentInfo, 0, len(resp.GetTorrents()))
-	for _, t := range resp.GetTorrents() {
-		out = append(out, mapTorrentInfo(t))
-	}
+	s.m.mu.RUnlock()
 	return &cdlv1.ListTorrentsResponse{Torrents: out}, nil
 }
 
@@ -88,95 +95,85 @@ func (s *contractsServer) GetCapabilities(context.Context, *cdlv1.GetCapabilitie
 	return &cdlv1.GetCapabilitiesResponse{
 		SupportsCategories:    true,
 		SupportsPausing:       true,
-		SupportsFileSelection: false,
+		SupportsFileSelection: true,
 		SupportedProtocols:    []string{"torrent", "magnet"},
 	}, nil
 }
 
-func (m *Module) pauseTorrent(id string) (bool, error) {
-	m.mu.RLock()
-	th, ok := m.torrents[id]
-	m.mu.RUnlock()
-	if !ok {
-		return false, fmt.Errorf("torrent %q not found", id)
+func torrentMatchesContractStatus(localStatus string, contractStatus cdlv1.TorrentStatus) bool {
+	if contractStatus == cdlv1.TorrentStatus_TORRENT_STATUS_UNSPECIFIED {
+		return true
 	}
-	th.mu.Lock()
-	if th.Status == "completed" || th.Status == "failed" || th.Status == "removed" {
-		th.mu.Unlock()
-		return false, fmt.Errorf("cannot pause torrent in status %s", th.Status)
-	}
-	if th.session != nil {
-		th.session.PauseDownload()
-	}
-	th.Status = "paused"
-	th.mu.Unlock()
-	m.persistActiveTorrents()
-	return true, nil
-}
-
-func (m *Module) resumeTorrent(id string) (bool, error) {
-	m.mu.RLock()
-	th, ok := m.torrents[id]
-	m.mu.RUnlock()
-	if !ok {
-		return false, fmt.Errorf("torrent %q not found", id)
-	}
-	th.mu.Lock()
-	if th.Status != "paused" {
-		th.mu.Unlock()
-		return false, fmt.Errorf("torrent is not paused")
-	}
-	session := th.session
-	th.Status = "downloading"
-	resumeCh := th.resumeCh
-	th.mu.Unlock()
-
-	select {
-	case resumeCh <- struct{}{}:
+	switch contractStatus {
+	case cdlv1.TorrentStatus_TORRENT_STATUS_DOWNLOADING:
+		return localStatus == "downloading" || localStatus == "queued" || localStatus == "seeding"
+	case cdlv1.TorrentStatus_TORRENT_STATUS_PAUSED:
+		return localStatus == "paused"
+	case cdlv1.TorrentStatus_TORRENT_STATUS_COMPLETED:
+		return localStatus == "completed"
+	case cdlv1.TorrentStatus_TORRENT_STATUS_FAILED:
+		return localStatus == "error"
 	default:
+		return false
 	}
-	if session != nil {
-		m.beginDownload(session)
-	}
-	m.persistActiveTorrents()
-	return true, nil
 }
 
-func mapTorrentInfo(t *downloaderv1.TorrentInfo) *cdlv1.TorrentInfo {
-	if t == nil {
+func localStatusToContract(st string) cdlv1.TorrentStatus {
+	switch st {
+	case "downloading", "queued", "seeding":
+		return cdlv1.TorrentStatus_TORRENT_STATUS_DOWNLOADING
+	case "paused":
+		return cdlv1.TorrentStatus_TORRENT_STATUS_PAUSED
+	case "completed":
+		return cdlv1.TorrentStatus_TORRENT_STATUS_COMPLETED
+	case "error":
+		return cdlv1.TorrentStatus_TORRENT_STATUS_FAILED
+	default:
+		return cdlv1.TorrentStatus_TORRENT_STATUS_UNKNOWN
+	}
+}
+
+func mapTorrentInfoFromHandle(th *torrentHandle) *cdlv1.TorrentInfo {
+	if th == nil {
 		return nil
 	}
+	th.mu.RLock()
+	defer th.mu.RUnlock()
+
+	progress := 0.0
+	if th.TotalSize > 0 {
+		progress = float64(th.Downloaded) / float64(th.TotalSize) * 100
+	}
+
 	info := &cdlv1.TorrentInfo{
-		Id:            t.GetId(),
-		Name:          t.GetName(),
-		InfoHash:      t.GetInfoHash(),
-		Size:          t.GetTotalSize(),
-		Downloaded:    t.GetDownloaded(),
-		Progress:      t.GetProgress(),
-		DownloadSpeed: int64(t.GetDownloadRate()),
-		UploadSpeed:   int64(t.GetUploadRate()),
-		Seeders:       t.GetSeeders(),
-		Leechers:      t.GetPeers(),
-		Status:        t.GetStatus(),
-		SavePath:      t.GetSavePath(),
-		Category:      t.GetLabel(),
+		Id:            th.ID,
+		Name:          th.Name,
+		InfoHash:      th.InfoHash,
+		Size:          th.TotalSize,
+		Downloaded:    th.Downloaded,
+		Uploaded:      th.Uploaded,
+		Progress:      progress,
+		DownloadSpeed: int64(th.DownloadRate),
+		UploadSpeed:   int64(th.UploadRate),
+		Seeders:       th.Seeders,
+		Leechers:      th.Peers,
+		Status:        localStatusToContract(th.Status),
+		SavePath:      th.SavePath,
+		Category:      th.Label,
+		Error:         th.ErrorStr,
 	}
-	if t.GetAddedAt() != "" {
-		if ts, err := time.Parse(time.RFC3339, t.GetAddedAt()); err == nil {
-			info.AddedAt = timestamppb.New(ts)
-		}
+	if !th.AddedAt.IsZero() {
+		info.AddedAt = timestamppb.New(th.AddedAt)
 	}
-	if t.GetCompletedAt() != "" {
-		if ts, err := time.Parse(time.RFC3339, t.GetCompletedAt()); err == nil {
-			info.CompletedAt = timestamppb.New(ts)
-		}
+	if th.CompletedAt != nil {
+		info.CompletedAt = timestamppb.New(*th.CompletedAt)
 	}
-	for _, f := range t.GetFiles() {
+	for _, f := range th.Files {
 		info.Files = append(info.Files, &cdlv1.TorrentFile{
-			Path:       f.GetPath(),
-			Size:       f.GetSize(),
-			Downloaded: f.GetDownloaded(),
-			Wanted:     true,
+			Path:       f.Path,
+			Size:       f.Size,
+			Downloaded: f.Downloaded,
+			Wanted:     f.Wanted,
 		})
 	}
 	return info

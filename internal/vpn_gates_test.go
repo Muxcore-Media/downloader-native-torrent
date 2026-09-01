@@ -29,6 +29,18 @@ func TestEnforceLiveDownloaderVPNReadableConf(t *testing.T) {
 	}
 }
 
+func TestValidateKillSwitchRefusedOnSharedHost(t *testing.T) {
+	t.Setenv("WG_KILL_SWITCH_ALLOW", "")
+	t.Setenv("WG_KILL_SWITCH_SCOPE", "")
+	if err := validateKillSwitch(true); err == nil {
+		t.Fatal("expected kill switch refusal on shared host")
+	}
+	t.Setenv("WG_KILL_SWITCH_ALLOW", "true")
+	if err := validateKillSwitch(true); err != nil {
+		t.Fatalf("opt-in allow: %v", err)
+	}
+}
+
 func TestModuleInitRejectsLiveWithoutVPN(t *testing.T) {
 	t.Setenv("DOWNLOADER_ENGINE", "live")
 	t.Setenv("WG_CONF", "")

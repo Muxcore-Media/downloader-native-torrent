@@ -18,7 +18,7 @@ func copyFixtureSeed(seed, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	dst, err := os.Create(dest)
 	if err != nil {
 		return err

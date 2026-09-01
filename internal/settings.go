@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,8 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 	filePri := m.filePriorityMode
 	dht := m.enableDHT
 	pex := m.enablePEX
+	seedRatio := m.seedRatio
+	seedMinutes := m.seedMinutes
 	m.mu.RUnlock()
 	return []contracts.SettingDef{
 		{
@@ -58,7 +61,7 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 			Type:        contracts.SettingTypeInt,
 			Default:     "6881",
 			Value:       strconv.Itoa(listenPort),
-			Description: "BitTorrent listen port",
+			Description: "BitTorrent listen port (rebinds the live engine immediately)",
 			Required:    false,
 			Group:       "Downloads",
 		},
@@ -68,7 +71,27 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 			Type:        contracts.SettingTypeString,
 			Default:     filePriorityAll,
 			Value:       filePri,
-			Description: "all | episodes (prefer SxxEyy, skip samples/packs when episodes exist) | season_packs (prefer season packs)",
+			Description: "all | episodes (prefer SxxEyy, skip samples/packs when episodes exist) | season_packs (prefer season packs); applies to active sessions",
+			Required:    false,
+			Group:       "Downloads",
+		},
+		{
+			Key:         "seed_ratio",
+			Label:       "Seed ratio target",
+			Type:        contracts.SettingTypeString,
+			Default:     "1.0",
+			Value:       strconv.FormatFloat(seedRatio, 'f', -1, 64),
+			Description: "Stop seeding when uploaded/size reaches this ratio",
+			Required:    false,
+			Group:       "Downloads",
+		},
+		{
+			Key:         "seed_minutes",
+			Label:       "Seed time limit (minutes)",
+			Type:        contracts.SettingTypeInt,
+			Default:     "60",
+			Value:       strconv.Itoa(seedMinutes),
+			Description: "Maximum seeding duration after download completes",
 			Required:    false,
 			Group:       "Downloads",
 		},
@@ -78,7 +101,7 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 			Type:        contracts.SettingTypeBool,
 			Default:     "true",
 			Value:       strconv.FormatBool(dht),
-			Description: "BitTorrent DHT peer discovery (applies on module restart)",
+			Description: "BitTorrent DHT peer discovery (applies on module restart only)",
 			Required:    false,
 			Group:       "BitTorrent",
 		},
@@ -88,7 +111,7 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 			Type:        contracts.SettingTypeBool,
 			Default:     "true",
 			Value:       strconv.FormatBool(pex),
-			Description: "Peer exchange (applies on module restart)",
+			Description: "Peer exchange (applies on module restart only)",
 			Required:    false,
 			Group:       "BitTorrent",
 		},
@@ -108,7 +131,7 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 			Type:        contracts.SettingTypeBool,
 			Default:     "false",
 			Value:       strconv.FormatBool(ks),
-			Description: "Block non-VPN traffic when WireGuard is active",
+			Description: "Block non-VPN traffic when WireGuard is active (refused on shared hosts unless WG_KILL_SWITCH_ALLOW=true)",
 			Required:    false,
 			Group:       "VPN",
 		},
@@ -122,8 +145,16 @@ func (m *Module) updateSetting(key, value string) error {
 		if value == "" {
 			return fmt.Errorf("download_path required")
 		}
+		if storageMode() == "local" {
+			if err := os.MkdirAll(value, 0755); err != nil {
+				return fmt.Errorf("download_path: %w", err)
+			}
+		}
 		m.mu.Lock()
 		m.dlDir = value
+		if ae, ok := m.engine.(*anacrolixEngine); ok {
+			ae.setDataDir(value)
+		}
 		m.mu.Unlock()
 		return nil
 	case "recheck_torrent":
@@ -135,13 +166,40 @@ func (m *Module) updateSetting(key, value string) error {
 		if err != nil || p <= 0 {
 			return fmt.Errorf("invalid listen_port")
 		}
+		host := ""
 		m.mu.Lock()
 		m.listenPort = p
+		if eng, ok := m.engine.(engineRebinder); ok {
+			host = eng.currentListenHost()
+		}
 		m.mu.Unlock()
+		if err := m.rebindEngine(host, p); err != nil {
+			return err
+		}
 		return nil
 	case "file_priority", "TORRENT_FILE_PRIORITY":
+		mode := normalizeFilePriorityMode(value)
 		m.mu.Lock()
-		m.filePriorityMode = normalizeFilePriorityMode(value)
+		m.filePriorityMode = mode
+		m.mu.Unlock()
+		m.applyFilePriorityToAllSessions(mode)
+		return nil
+	case "seed_ratio", "SEED_RATIO":
+		r, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || r <= 0 {
+			return fmt.Errorf("invalid seed_ratio")
+		}
+		m.mu.Lock()
+		m.seedRatio = r
+		m.mu.Unlock()
+		return nil
+	case "seed_minutes", "SEED_MINUTES":
+		minutes, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || minutes <= 0 {
+			return fmt.Errorf("invalid seed_minutes")
+		}
+		m.mu.Lock()
+		m.seedMinutes = minutes
 		m.mu.Unlock()
 		return nil
 	case "enable_dht", "TORRENT_ENABLE_DHT":
@@ -160,8 +218,12 @@ func (m *Module) updateSetting(key, value string) error {
 		m.mu.Unlock()
 		return nil
 	case "wg_kill_switch", "WG_KILL_SWITCH":
+		enabled := value == "true" || value == "1" || value == "on"
+		if err := validateKillSwitch(enabled); err != nil {
+			return err
+		}
 		m.mu.Lock()
-		m.wgKillSwitch = value == "true" || value == "1" || value == "on"
+		m.wgKillSwitch = enabled
 		m.mu.Unlock()
 		return nil
 	default:
@@ -206,6 +268,7 @@ func (m *Module) applyTorrentFilePriority(spec string) error {
 	th.mu.RUnlock()
 	if applier, ok := session.(filePriorityApplier); ok {
 		applier.ApplyFilePriorities(mode)
+		m.syncFileWanted(th, session)
 		return nil
 	}
 	return fmt.Errorf("torrent does not support file priority")
