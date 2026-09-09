@@ -85,6 +85,20 @@ func (m *Module) engineNeedsVPN() bool {
 	}
 }
 
+func (m *Module) requireVPNReadyNow() error {
+	if !m.engineNeedsVPN() {
+		return nil
+	}
+	if m.wgConfPath == "" && os.Getenv("WG_CONF") == "" {
+		return fmt.Errorf("WG_CONF required for live torrent engine")
+	}
+	connected, _, _, _, _, _, _ := m.vpn.status()
+	if !connected {
+		return fmt.Errorf("wireguard not connected")
+	}
+	return nil
+}
+
 func (m *Module) requireVPNConnected(ctx context.Context) error {
 	if !m.engineNeedsVPN() {
 		return nil

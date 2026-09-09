@@ -483,6 +483,10 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 		}
 	}
 
+	if err := m.requireVPNReadyNow(); err != nil {
+		return nil, err
+	}
+
 	th := m.spawnTorrent("", uri, savePath, req.GetLabel(), req.GetPaused())
 	m.persistActiveTorrents()
 

@@ -3,7 +3,10 @@ package internal
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
+
+	downloaderv1 "github.com/Muxcore-Media/downloader-native-torrent/proto/downloaderv1"
 )
 
 func TestEnforceLiveDownloaderVPN(t *testing.T) {
@@ -47,5 +50,21 @@ func TestModuleInitRejectsLiveWithoutVPN(t *testing.T) {
 	m := NewModule(Config{GRPCAddr: ":0"})
 	if err := m.Init(context.Background()); err == nil {
 		t.Fatal("expected Init to fail without WG_CONF for live engine")
+	}
+}
+
+type vpnLiveEngine struct {
+	fakeEngine
+}
+
+func TestAddTorrentFailsFastWithoutVPNOnLiveEngine(t *testing.T) {
+	t.Setenv("DOWNLOADER_ENGINE", "live")
+	t.Setenv("WG_CONF", "")
+	m := newTestModuleWithEngine(t, &vpnLiveEngine{fakeEngine: fakeEngine{instantComplete: true}})
+	_, err := m.AddTorrent(context.Background(), &downloaderv1.AddTorrentRequest{
+		Uri: "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&dn=VPN",
+	})
+	if err == nil || !strings.Contains(err.Error(), "WG_CONF") {
+		t.Fatalf("expected WG_CONF fail-fast, got %v", err)
 	}
 }
