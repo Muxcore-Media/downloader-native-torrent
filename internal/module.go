@@ -490,15 +490,14 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 	th := m.spawnTorrent("", uri, savePath, req.GetLabel(), req.GetPaused())
 	m.persistActiveTorrents()
 
-	th.mu.RLock()
+	th.mu.Lock()
 	name, infoHash := th.Name, th.InfoHash
-	th.mu.RUnlock()
 	if storageMode() == "mesh" && infoHash != "" && !strings.Contains(th.SavePath, infoHash) {
-		th.mu.Lock()
 		th.SavePath = storageSavePath(infoHash)
-		th.mu.Unlock()
 	}
-	slog.Info("torrent added", "id", th.ID, "name", name, "save_path", th.SavePath)
+	curSavePath := th.SavePath
+	th.mu.Unlock()
+	slog.Info("torrent added", "id", th.ID, "name", name, "save_path", curSavePath)
 	return &downloaderv1.AddTorrentResponse{
 		Id: th.ID, Name: name, InfoHash: infoHash,
 	}, nil
