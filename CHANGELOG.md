@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.10] - 2026-10-05
+
+
+### Changed
+- Fixture engine payload is now 6 MiB (sparse: 8 KiB pattern header, remainder via `Truncate`) so media-scanner's default 5 MiB minimum no longer skips fixture grabs; reported total/progress sizes follow the file.
+
 ## [0.3.8] - 2026-10-05
 
 ### Changed

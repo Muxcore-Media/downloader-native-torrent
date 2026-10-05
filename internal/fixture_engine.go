@@ -29,7 +29,7 @@ func (e *fixtureEngine) AddURI(ctx context.Context, uri, savePath string) (manag
 		name:     name,
 		hash:     hash,
 		savePath: savePath,
-		total:    fixturePayloadSize(8 * 1024),
+		total:    fixturePayloadSize(fixturePayloadDefaultSize),
 	}
 	e.mu.Lock()
 	e.torrents = append(e.torrents, ft)
