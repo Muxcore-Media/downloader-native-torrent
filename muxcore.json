@@ -1,7 +1,7 @@
 {
   "name": "Downloader Native Torrent",
   "description": "Native BitTorrent engine (anacrolix/torrent) with WireGuard VPN and NAT-PMP support",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "author": "MuxCore",
   "roles": [
     "downloader"
