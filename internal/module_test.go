@@ -515,6 +515,8 @@ func contains(s, sub string) bool {
 }
 
 func TestLifecycle(t *testing.T) {
+	// Plaintext gRPC listener for this lifecycle test (dev flag honoured by meshtls).
+	t.Setenv("MUXCORE_DEV_TLS_SKIP", "true")
 	m := NewModule(Config{
 		GRPCAddr:    ":0",
 		DownloadDir: filepath.Join(t.TempDir(), "dl"),

@@ -21,6 +21,7 @@ import (
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	"github.com/Muxcore-Media/core/sdk/go/client"
 	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
+	"github.com/Muxcore-Media/core/sdk/go/module/meshtls"
 	manifest "github.com/Muxcore-Media/downloader-native-torrent"
 	"github.com/Muxcore-Media/downloader-native-torrent/internal/meshstore"
 	downloaderv1 "github.com/Muxcore-Media/downloader-native-torrent/proto/downloaderv1"
@@ -363,7 +364,11 @@ func (m *Module) rebindTorrent(host string, port int, iface string) {
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.grpcSrv = grpc.NewServer()
+	srv, err := meshtls.NewServer()
+	if err != nil {
+		return fmt.Errorf("gRPC mesh TLS: %w", err)
+	}
+	m.grpcSrv = srv
 	downloaderv1.RegisterTorrentServiceServer(m.grpcSrv, m)
 	cdlv1.RegisterDownloaderServiceServer(m.grpcSrv, &contractsServer{m: m})
 	m.registerSettingsMesh(m.grpcSrv)
@@ -422,8 +427,11 @@ func (m *Module) Stop(ctx context.Context) error {
 	}
 	m.natPMP.stop()
 	_ = m.vpn.stop()
-	if m.mc != nil {
-		_ = m.mc.Close()
+	m.mu.RLock()
+	mc := m.mc
+	m.mu.RUnlock()
+	if mc != nil {
+		_ = mc.Close()
 	}
 	if m.grpcSrv != nil {
 		m.grpcSrv.GracefulStop()
