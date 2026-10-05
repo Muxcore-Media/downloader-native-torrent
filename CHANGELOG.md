@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.12] - 2026-10-05
+
+
+### Fixed
+- Fixture engine in mesh storage mode (`storage://torrent/...` save paths) no longer creates a literal `storage:` directory under the CWD; its payload is now written through the core StorageService at `torrent/{infohash}/files/{rel}` (same layout/URIs as the live engine's assembly). Local-filesystem writes (fixture engine, `AddTorrent`, session restore) now reject any save path containing `://`.
+
 ## [0.3.11] - 2026-10-05
 
 

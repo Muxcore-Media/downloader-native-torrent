@@ -260,7 +260,7 @@ func (m *Module) Init(ctx context.Context) error {
 		switch mode {
 		case engineModeFixture:
 			slog.Info("downloader engine: fixture (no network; default)")
-			m.engine = &fixtureEngine{}
+			m.engine = m.newFixtureEngine()
 		default:
 			slog.Warn("downloader engine: LIVE acquisition enabled (DOWNLOADER_ENGINE=live, VPN configured)")
 			if storageMode() == "local" {
@@ -488,7 +488,7 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 		}
 	}
 	if storageMode() != "mesh" {
-		if err := os.MkdirAll(savePath, 0755); err != nil {
+		if err := mkdirAllLocal(savePath, 0755); err != nil {
 			return nil, fmt.Errorf("create save path: %w", err)
 		}
 	}

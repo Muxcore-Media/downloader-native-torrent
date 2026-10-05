@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"strings"
@@ -90,4 +91,43 @@ func materializeFixtureFile(abs string, size int64) error {
 		return err
 	}
 	return f.Close()
+}
+
+// fixturePayloadReader returns the fixture payload as a stream (seed file when
+// configured, else the pattern header followed by a zero tail) and its size.
+func fixturePayloadReader(size int64) (io.Reader, int64, func(), error) {
+	if seed := fixtureMediaSeed(); seed != "" {
+		f, err := os.Open(seed)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		info, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return nil, 0, nil, err
+		}
+		return f, info.Size(), func() { _ = f.Close() }, nil
+	}
+	header := size
+	if header > fixtureHeaderSize {
+		header = fixtureHeaderSize
+	}
+	if header < 0 {
+		header = 0
+	}
+	payload := make([]byte, header)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	r := io.MultiReader(bytes.NewReader(payload), io.LimitReader(zeroReader{}, size-header))
+	return r, size, func() {}, nil
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }

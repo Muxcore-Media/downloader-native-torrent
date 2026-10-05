@@ -187,7 +187,7 @@ func (m *Module) restorePersistedTorrents() {
 		if !strings.HasPrefix(savePath, "storage://") {
 			savePath = resolveSavePath(m.dlDir, rec.SavePath)
 			if isRestorableRunningStatus(rec.Status) {
-				if err := os.MkdirAll(savePath, 0755); err != nil {
+				if err := mkdirAllLocal(savePath, 0755); err != nil {
 					slog.Warn("restore save path", "id", rec.ID, "error", err)
 					continue
 				}

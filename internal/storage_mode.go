@@ -179,7 +179,7 @@ func (m *Module) ensureEngine(ctx context.Context) error {
 	}
 	if engMode == engineModeFixture {
 		slog.Info("downloader engine: fixture (no network; default)")
-		m.engine = &fixtureEngine{}
+		m.engine = m.newFixtureEngine()
 		return nil
 	}
 	// Fail closed: live engine is never built without the VPN config check.
@@ -218,4 +218,22 @@ func (m *Module) ensureEngine(ctx context.Context) error {
 	m.engine = eng
 	slog.Info("torrent storage: local file", "dir", m.dlDir)
 	return nil
+}
+
+// newFixtureEngine builds the fixture engine; in mesh storage mode its payload
+// goes through the core StorageService (resolved lazily once connected).
+func (m *Module) newFixtureEngine() *fixtureEngine {
+	e := &fixtureEngine{}
+	if storageMode() == "mesh" {
+		e.meshBackend = func() meshstore.Backend {
+			m.mu.RLock()
+			mc := m.mc
+			m.mu.RUnlock()
+			if mc == nil {
+				return nil
+			}
+			return meshBackendFromClient(mc)
+		}
+	}
+	return e
 }
