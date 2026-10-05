@@ -61,6 +61,16 @@ type anacrolixEngineOpts struct {
 	MeshStorage storage.ClientImplCloser // when set, no local DOWNLOAD_DIR piece store
 }
 
+// newLiveEngine builds the network-facing engine. Tests replace it with a stub so
+// constructing the live engine never opens sockets or dials swarms.
+var newLiveEngine = func(dataDir string, listenPort int, opts anacrolixEngineOpts) (torrentEngine, error) {
+	e, err := newAnacrolixEngineOpts(dataDir, listenPort, nil, opts)
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
 func newAnacrolixEngineOpts(dataDir string, listenPort int, hc *http.Client, opts anacrolixEngineOpts) (*anacrolixEngine, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}

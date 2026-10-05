@@ -24,12 +24,8 @@ func publicMetainfoCacheEnabled() bool {
 	if envFlagTruthy(os.Getenv("DOWNLOADER_PUBLIC_METAINFO_CACHE")) {
 		return true
 	}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("DOWNLOADER_ENGINE"))) {
-	case "fixture", "fake":
-		return false
-	default:
-		return true
-	}
+	mode, err := resolveEngineMode(os.Getenv("DOWNLOADER_ENGINE"))
+	return err == nil && mode == engineModeLive
 }
 
 func defaultMetainfoHTTPClient() *http.Client {

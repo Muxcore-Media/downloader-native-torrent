@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.11] - 2026-10-05
+
+
+### Security
+- Fail-closed engine selection (NFR-SEC-010, FR-INS-003, ADR-0008): unset/empty `DOWNLOADER_ENGINE` now selects the fixture engine (previously live). Live acquisition requires `DOWNLOADER_ENGINE=live` AND a readable `WG_CONF`; otherwise `Init`/engine creation fails with a clear error (no silent fallback to fixture). Unknown values are rejected. Startup logs the active engine (info for fixture, warning for live). Public metainfo cache is likewise only used by the live engine.
+
 ## [0.3.10] - 2026-10-05
 
 

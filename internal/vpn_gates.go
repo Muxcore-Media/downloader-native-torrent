@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -17,17 +18,44 @@ func envFlagTruthy(v string) bool {
 	}
 }
 
-func liveEngineRequiresVPN(engine string) bool {
-	switch strings.ToLower(strings.TrimSpace(engine)) {
-	case "fixture", "fake":
-		return false
+// Engine modes for DOWNLOADER_ENGINE (NFR-SEC-010, FR-INS-003, ADR-0008).
+const (
+	engineModeFixture = "fixture"
+	engineModeLive    = "live"
+)
+
+// resolveEngineMode maps DOWNLOADER_ENGINE to an engine mode. Unset/empty selects
+// the fixture engine; "live" is the only way to reach the network engine.
+// Anything else is an error (fail closed, never a silent fallback).
+func resolveEngineMode(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "fixture", "fake":
+		return engineModeFixture, nil
+	case "live":
+		return engineModeLive, nil
+	case "anacrolix":
+		// Deprecated alias kept so existing operator .env files keep working;
+		// still subject to the same VPN requirement as "live".
+		slog.Warn("DOWNLOADER_ENGINE=anacrolix is deprecated; use DOWNLOADER_ENGINE=live")
+		return engineModeLive, nil
 	default:
-		return true
+		return "", fmt.Errorf("unknown DOWNLOADER_ENGINE %q (want unset/fixture or live)", v)
 	}
 }
 
+// liveEngineRequiresVPN reports whether the engine value selects live acquisition.
+// Unknown values are treated as live (requiring VPN); resolveEngineMode rejects them.
+func liveEngineRequiresVPN(engine string) bool {
+	mode, err := resolveEngineMode(engine)
+	return err != nil || mode == engineModeLive
+}
+
 func enforceLiveDownloaderVPN(wgConfPath, engine string) error {
-	if !liveEngineRequiresVPN(engine) {
+	mode, err := resolveEngineMode(engine)
+	if err != nil {
+		return err
+	}
+	if mode != engineModeLive {
 		return nil
 	}
 	path := strings.TrimSpace(wgConfPath)
@@ -35,7 +63,7 @@ func enforceLiveDownloaderVPN(wgConfPath, engine string) error {
 		path = strings.TrimSpace(os.Getenv("WG_CONF"))
 	}
 	if path == "" {
-		return fmt.Errorf("WG_CONF required for live torrent engine")
+		return fmt.Errorf("DOWNLOADER_ENGINE=live requires WG_CONF (WireGuard config); refusing to start live acquisition without VPN")
 	}
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("WG_CONF %q: %w", path, err)

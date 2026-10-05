@@ -172,11 +172,19 @@ func (m *Module) ensureEngine(ctx context.Context) error {
 	if m.engine != nil {
 		return nil
 	}
-	switch os.Getenv("DOWNLOADER_ENGINE") {
-	case "fixture", "fake":
-		slog.Info("using fixture torrent engine (no network)")
+	engineEnv := os.Getenv("DOWNLOADER_ENGINE")
+	engMode, err := resolveEngineMode(engineEnv)
+	if err != nil {
+		return err
+	}
+	if engMode == engineModeFixture {
+		slog.Info("downloader engine: fixture (no network; default)")
 		m.engine = &fixtureEngine{}
 		return nil
+	}
+	// Fail closed: live engine is never built without the VPN config check.
+	if err := enforceLiveDownloaderVPN(m.wgConfPath, engineEnv); err != nil {
+		return err
 	}
 	mode := storageMode()
 	if mode == "mesh" {
@@ -185,7 +193,7 @@ func (m *Module) ensureEngine(ctx context.Context) error {
 		}
 		ms := meshstore.New(meshBackendFromClient(m.mc))
 		m.mesh = ms
-		eng, err := newAnacrolixEngineOpts(m.dlDir, m.listenPort, nil, anacrolixEngineOpts{
+		eng, err := newLiveEngine(m.dlDir, m.listenPort, anacrolixEngineOpts{
 			EnableDHT:   m.enableDHT,
 			EnablePEX:   m.enablePEX,
 			MeshStorage: ms,
@@ -200,7 +208,7 @@ func (m *Module) ensureEngine(ctx context.Context) error {
 	if err := os.MkdirAll(m.dlDir, 0755); err != nil {
 		return fmt.Errorf("create download dir: %w", err)
 	}
-	eng, err := newAnacrolixEngineOpts(m.dlDir, m.listenPort, nil, anacrolixEngineOpts{
+	eng, err := newLiveEngine(m.dlDir, m.listenPort, anacrolixEngineOpts{
 		EnableDHT: m.enableDHT,
 		EnablePEX: m.enablePEX,
 	})

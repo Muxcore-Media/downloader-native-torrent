@@ -32,7 +32,7 @@ Proton WireGuard configs with `# NAT-PMP (Port Forwarding) = on` trigger a map t
 | `WG_KILL_SWITCH` | `false` | Enable VPN kill switch |
 | `NAT_PMP_PORT` | `0` | Not sent to Proton. Optional fallback listen port if `TORRENT_LISTEN_PORT` is unset. Proton assigns a random 60s port via NAT-PMP (`10.2.0.1:5351`); the downloader listens on that port and renews every 45s |
 | `MUXCORE_GRPC_ADDR` | — | Core mesh (required for mesh storage + download.* events) |
-| `DOWNLOADER_ENGINE` | `""` (live) | `fake` / `fixture` for tests; live requires `WG_CONF` and waits for VPN before swarm I/O |
+| `DOWNLOADER_ENGINE` | `""` (fixture) | Unset/`fixture`/`fake` = fixture engine (no network). `live` = real swarms; requires a readable `WG_CONF` and waits for VPN before swarm I/O. Any other value is rejected; live without VPN refuses to start (fail closed). |
 | `DOWNLOADER_PUBLIC_METAINFO_CACHE` | `false` when engine is fixture/fake | Set `true` to allow itorrents.org/net metainfo fallback (infohash leak risk) |
 | `MUXCORE_INSECURE_DISABLE_TLS` | `false` | Disable TLS for local core |
 | `WG_KILL_SWITCH_ALLOW` | `false` | Explicit opt-in for kill switch on shared hosts (vault) |

@@ -253,13 +253,18 @@ func (m *Module) Init(ctx context.Context) error {
 		}
 	}
 	if m.engine == nil {
-		switch os.Getenv("DOWNLOADER_ENGINE") {
-		case "fixture", "fake":
-			slog.Info("using fixture torrent engine (no network)")
+		mode, err := resolveEngineMode(engineEnv)
+		if err != nil {
+			return err
+		}
+		switch mode {
+		case engineModeFixture:
+			slog.Info("downloader engine: fixture (no network; default)")
 			m.engine = &fixtureEngine{}
 		default:
+			slog.Warn("downloader engine: LIVE acquisition enabled (DOWNLOADER_ENGINE=live, VPN configured)")
 			if storageMode() == "local" {
-				eng, err := newAnacrolixEngineOpts(m.dlDir, m.listenPort, nil, anacrolixEngineOpts{
+				eng, err := newLiveEngine(m.dlDir, m.listenPort, anacrolixEngineOpts{
 					EnableDHT: m.enableDHT,
 					EnablePEX: m.enablePEX,
 				})
@@ -280,9 +285,14 @@ func (m *Module) Init(ctx context.Context) error {
 		"addr", m.grpcAddr, "storage", storageMode(), "dir", m.dlDir, "listen_port", m.listenPort,
 		"file_priority", m.filePriorityMode, "dht", m.enableDHT, "pex", m.enablePEX)
 
-	go m.autoStartVPN()
+	if autoStartVPNOnInit {
+		go m.autoStartVPN()
+	}
 	return nil
 }
+
+// autoStartVPNOnInit is false only in tests that must not bring up WireGuard.
+var autoStartVPNOnInit = true
 
 func (m *Module) autoStartVPN() {
 	cfgPath := m.wgConfPath
