@@ -6,7 +6,7 @@ require (
 	github.com/Muxcore-Media/contracts-downloader v0.1.1
 	github.com/Muxcore-Media/core/pkg/contracts v0.6.0
 	github.com/Muxcore-Media/core/sdk/go/client v0.6.1
-	github.com/Muxcore-Media/core/sdk/go/module v0.6.3
+	github.com/Muxcore-Media/core/sdk/go/module v0.6.4
 	github.com/anacrolix/generics v0.1.1-0.20251125230353-15d98d46693b
 	github.com/anacrolix/torrent v1.61.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6
@@ -15,7 +15,7 @@ require (
 )
 
 require (
-	github.com/Muxcore-Media/core v0.6.12 // indirect
+	github.com/Muxcore-Media/core v0.6.14 // indirect
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
