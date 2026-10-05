@@ -1,23 +1,21 @@
 module github.com/Muxcore-Media/downloader-native-torrent
 
-go 1.26.4
+go 1.26.6
 
 require (
-	github.com/Muxcore-Media/contracts-downloader v0.1.0
-	github.com/Muxcore-Media/core/pkg/contracts v0.5.8
-	github.com/Muxcore-Media/core/sdk/go/client v0.5.8
-	github.com/Muxcore-Media/core/sdk/go/module v0.5.8
+	github.com/Muxcore-Media/contracts-downloader v0.1.1
+	github.com/Muxcore-Media/core/pkg/contracts v0.6.0
+	github.com/Muxcore-Media/core/sdk/go/client v0.6.0
+	github.com/Muxcore-Media/core/sdk/go/module v0.6.0
 	github.com/anacrolix/generics v0.1.1-0.20251125230353-15d98d46693b
 	github.com/anacrolix/torrent v1.61.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6
-	google.golang.org/grpc v1.82.1
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )
 
 require (
-	github.com/Muxcore-Media/contracts-media v0.1.0 // indirect
-	github.com/Muxcore-Media/core v0.5.8 // indirect
-	github.com/Muxcore-Media/core/pkg/tenant v0.0.0-00010101000000-000000000000 // indirect
+	github.com/Muxcore-Media/core v0.6.0 // indirect
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
@@ -92,12 +90,12 @@ require (
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6 // indirect
-	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260610212136-7ab31c22f7ad // indirect
@@ -108,17 +106,3 @@ require (
 	modernc.org/sqlite v1.21.1 // indirect
 	zombiezen.com/go/sqlite v0.13.1 // indirect
 )
-
-replace github.com/Muxcore-Media/core => ../core
-
-replace github.com/Muxcore-Media/contracts-downloader => ../contracts-downloader
-
-replace github.com/Muxcore-Media/contracts-media => ../contracts-media
-
-replace github.com/Muxcore-Media/core/pkg/contracts => ../core/pkg/contracts
-
-replace github.com/Muxcore-Media/core/pkg/tenant => ../core/pkg/tenant
-
-replace github.com/Muxcore-Media/core/sdk/go/module => ../core/sdk/go/module
-
-replace github.com/Muxcore-Media/core/sdk/go/client => ../core/sdk/go/client

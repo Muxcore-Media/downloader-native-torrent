@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.8] - 2026-10-05
+
+### Changed
+- CI runs on GitHub-hosted runners from the umbrella template; retired-origin workflows removed.
+- Dependencies resolve from published GitHub tags (no filesystem `replace`); requires core v0.6.0.
+
 ## v0.3.8 (2026-08-31)
 
 - VPN rebind migrates live torrent sessions onto the new anacrolix client instead of dropping them.
@@ -8,7 +14,7 @@
 - Live settings: `listen_port` rebinds engine, `download_path` retargets local dir, `file_priority` applies to active sessions; `seed_ratio` / `seed_minutes` exposed.
 - VPN: honor WireGuard `DNS=`, iptables fail-closed, refuse `WG_KILL_SWITCH` on shared hosts unless `WG_KILL_SWITCH_ALLOW=true`.
 - Live engine gates `AddURI` until WireGuard connects; completed/error torrents persist in session history; seeding reports upload rate and `seeding` status.
-- Tests: contracts server, mesh `torrent/sessions.json`, rebind migration; Forgejo CI runs `golangci-lint`.
+- Tests: contracts server, mesh `torrent/sessions.json`, rebind migration; CI runs `golangci-lint`.
 
 ## v0.3.1 (2026-08-20)
 
