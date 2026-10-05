@@ -82,9 +82,10 @@ func TestResolveSavePathRelative(t *testing.T) {
 	if resolveSavePath("/data/downloads", "") != "/data/downloads" {
 		t.Fatal("empty")
 	}
+	// An absolute path outside the download dir is clamped, never honoured.
 	abs := filepath.Join(t.TempDir(), "abs")
-	if resolveSavePath("/data/downloads", abs) != abs {
-		t.Fatal("abs")
+	if resolveSavePath("/data/downloads", abs) != "/data/downloads" {
+		t.Fatal("abs outside must clamp to dataDir")
 	}
 }
 

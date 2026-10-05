@@ -29,7 +29,7 @@ func publicMetainfoCacheEnabled() bool {
 }
 
 func defaultMetainfoHTTPClient() *http.Client {
-	return &http.Client{Timeout: 45 * time.Second}
+	return newUserHTTPClient(45 * time.Second)
 }
 
 func fetchTorrentMetainfoWith(ctx context.Context, ihHex string, hc *http.Client, mesh meshMetaReader) ([]byte, error) {

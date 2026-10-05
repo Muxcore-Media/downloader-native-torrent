@@ -73,7 +73,7 @@ var newLiveEngine = func(dataDir string, listenPort int, opts anacrolixEngineOpt
 
 func newAnacrolixEngineOpts(dataDir string, listenPort int, hc *http.Client, opts anacrolixEngineOpts) (*anacrolixEngine, error) {
 	if hc == nil {
-		hc = &http.Client{Timeout: 30 * time.Second}
+		hc = defaultTorrentHTTP
 	}
 	e := &anacrolixEngine{
 		http: hc, dataDir: dataDir, listenPort: listenPort, listenHost: opts.ListenHost,
@@ -426,7 +426,7 @@ func isMagnetURI(s string) bool {
 
 func httpClientStopOnMagnet(hc *http.Client) *http.Client {
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = defaultTorrentHTTP
 	}
 	c := *hc
 	prev := hc.CheckRedirect
@@ -446,7 +446,7 @@ func httpClientStopOnMagnet(hc *http.Client) *http.Client {
 }
 
 func fetchTorrentFile(ctx context.Context, hc *http.Client, uri string) ([]byte, string, error) {
-	hc = httpClientStopOnMagnet(hc)
+	hc = httpClientStopOnMagnet(torrentFetchClient(hc, uri))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
 		return nil, "", err

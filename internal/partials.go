@@ -3,12 +3,15 @@ package internal
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/Muxcore-Media/core/sdk/go/module/pathguard"
 )
 
 type pieceLayout struct {
@@ -338,26 +341,44 @@ func linkOrCopy(src, dst string) error {
 	return closeErr
 }
 
+// confineSavePath resolves a caller-supplied save path under dataDir and
+// rejects anything that escapes it (RULE-VAL-1): relative paths are joined
+// under dataDir ("..", NUL bytes and absolute-looking names refused); absolute
+// paths are accepted only when, after symlink resolution, they lie inside
+// dataDir. Empty savePath means dataDir itself.
+func confineSavePath(dataDir, savePath string) (string, error) {
+	dataDir = strings.TrimSpace(dataDir)
+	savePath = strings.TrimSpace(savePath)
+	if dataDir == "" {
+		return "", fmt.Errorf("download dir not configured")
+	}
+	dataDir = filepath.Clean(dataDir)
+	if savePath == "" {
+		return dataDir, nil
+	}
+	if filepath.IsAbs(savePath) {
+		return pathguard.Confine(savePath, []string{dataDir})
+	}
+	return pathguard.Join(dataDir, savePath)
+}
+
+// resolveSavePath is the lenient form used for already-accepted/persisted
+// paths: anything that fails confinement is clamped to dataDir.
 func resolveSavePath(dataDir, savePath string) string {
 	dataDir = strings.TrimSpace(dataDir)
 	if dataDir != "" {
 		dataDir = filepath.Clean(dataDir)
 	}
-	savePath = strings.TrimSpace(savePath)
-	if savePath == "" {
+	if strings.TrimSpace(savePath) == "" {
 		return dataDir
-	}
-	if filepath.IsAbs(savePath) {
-		return filepath.Clean(savePath)
 	}
 	if dataDir == "" {
-		return filepath.Clean(savePath)
+		return filepath.Clean(strings.TrimSpace(savePath))
 	}
-	abs := filepath.Clean(filepath.Join(dataDir, savePath))
-	if !pathInsideRoot(dataDir, abs) {
-		return dataDir
+	if p, err := confineSavePath(dataDir, savePath); err == nil {
+		return p
 	}
-	return abs
+	return dataDir
 }
 
 func joinSaveAndRelPath(savePath, file string) string {
@@ -400,12 +421,4 @@ func joinSaveAndRelPath(savePath, file string) string {
 		return filepath.Clean(filepath.Join(filepath.FromSlash(prefix), file))
 	}
 	return filepath.Clean(filepath.Join(savePath, file))
-}
-
-func pathInsideRoot(root, p string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(p))
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

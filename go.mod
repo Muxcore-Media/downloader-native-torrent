@@ -6,7 +6,7 @@ require (
 	github.com/Muxcore-Media/contracts-downloader v0.1.1
 	github.com/Muxcore-Media/core/pkg/contracts v0.6.0
 	github.com/Muxcore-Media/core/sdk/go/client v0.6.1
-	github.com/Muxcore-Media/core/sdk/go/module v0.6.5
+	github.com/Muxcore-Media/core/sdk/go/module v0.6.6
 	github.com/anacrolix/generics v0.1.1-0.20251125230353-15d98d46693b
 	github.com/anacrolix/torrent v1.61.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.16] - 2026-10-05
+
+
+### Security
+- Torrent/indexer URL fetches (AddTorrent http(s) URIs, Prowlarr-style redirects, public metainfo cache) use the netguard UserURL client: private, loopback, link-local and cloud-metadata targets are blocked at dial time and on every redirect; AddTorrent validates the URL up front (NFR-SEC-009 / RULE-VAL-2; sdk/go/module v0.6.6).
+- New opt-in `DOWNLOADER_INDEXER_HOSTS` (comma-separated host[:port]) lets a LAN indexer proxy such as Prowlarr be reached on private addresses; it is pinned to the listed hosts and metadata/link-local stay blocked.
+- AddTorrent `save_path` is confined to the download dir with pathguard: absolute paths outside it, `..`, sibling-prefix and symlink escapes are rejected (previously absolute paths were accepted as-is). Restored/persisted paths that fail confinement clamp to the download dir (NFR-SEC-008 / RULE-VAL-1).
+
 ## [0.3.15] - 2026-10-05
 
 

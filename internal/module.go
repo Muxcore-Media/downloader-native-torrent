@@ -467,8 +467,14 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 	if uri == "" {
 		return nil, fmt.Errorf("uri is required")
 	}
-	if _, err := classifyURI(uri); err != nil {
+	kind, err := classifyURI(uri)
+	if err != nil {
 		return nil, err
+	}
+	if kind == "http" {
+		if err := validateTorrentURL(uri); err != nil {
+			return nil, fmt.Errorf("torrent url rejected: %w", err)
+		}
 	}
 	if err := m.ensureEngine(ctx); err != nil {
 		return nil, err
@@ -483,7 +489,11 @@ func (m *Module) AddTorrent(ctx context.Context, req *downloaderv1.AddTorrentReq
 			savePath = storageSavePath(hash)
 		}
 	} else {
-		savePath = resolveSavePath(m.dlDir, req.GetSavePath())
+		sp, err := confineSavePath(m.dlDir, req.GetSavePath())
+		if err != nil {
+			return nil, fmt.Errorf("save_path rejected: %w", err)
+		}
+		savePath = sp
 	}
 	if hash != "" {
 		if existing := m.findHandleByInfoHash(hash); existing != nil {
